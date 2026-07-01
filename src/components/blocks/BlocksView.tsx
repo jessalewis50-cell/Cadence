@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase-browser";
-import { to12h, to24h, addMinutes, toDateStr, buildTimeOptions } from "@/lib/time";
+import { to12h, addMinutes, toDateStr } from "@/lib/time";
 import { CAT_COLORS, CAT_LABELS } from "@/lib/constants";
+import TimeField from "@/components/ui/TimeField";
 import type { BlockTemplate, ScheduleBlock, Category } from "@/lib/types";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -36,56 +37,6 @@ function nextStartTime(dayBlocks: ScheduleBlock[]): string {
   if (dayBlocks.length === 0) return "09:00";
   const sorted = [...dayBlocks].sort((a, b) => a.end_time.localeCompare(b.end_time));
   return sorted[sorted.length - 1].end_time;
-}
-
-const TIME_OPTIONS = buildTimeOptions();
-
-function TimeCombobox({ value, onChange, placeholder }: {
-  value: string; onChange: (v: string) => void; placeholder: string;
-}) {
-  const [open, setOpen]         = useState(false);
-  const [inputVal, setInputVal] = useState(value ? to12h(value) : "");
-  const ref     = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => { if (!open) setInputVal(value ? to12h(value) : ""); }, [value, open]);
-
-  const filtered = inputVal
-    ? TIME_OPTIONS.filter(t => t.label.toLowerCase().startsWith(inputVal.toLowerCase()) || t.value.startsWith(inputVal))
-    : TIME_OPTIONS;
-
-  useEffect(() => {
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, []);
-
-  useEffect(() => {
-    if (open && listRef.current && value) {
-      (listRef.current.querySelector(`[data-val="${value}"]`) as HTMLElement | null)?.scrollIntoView({ block: "nearest" });
-    }
-  }, [open, value]);
-
-  return (
-    <div ref={ref} className="relative flex-1">
-      <input
-        type="text" value={inputVal} placeholder={placeholder}
-        onChange={e => { setInputVal(e.target.value); onChange(to24h(e.target.value)); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        className="w-full bg-ink border border-line rounded-lg px-2 py-1.5 text-txt text-sm outline-none focus:border-violet transition-colors"
-      />
-      {open && filtered.length > 0 && (
-        <div ref={listRef} className="absolute z-30 top-full left-0 mt-1 w-full max-h-[160px] overflow-y-auto bg-panel border border-line rounded-lg shadow-xl">
-          {filtered.map(t => (
-            <button key={t.value} type="button" data-val={t.value}
-              onMouseDown={e => { e.preventDefault(); setInputVal(t.label); onChange(t.value); setOpen(false); }}
-              className={`w-full text-left px-3 py-1.5 text-[13px] hover:bg-panel-2 transition-colors ${t.value === value ? "text-violet font-medium" : "text-txt"}`}
-            >{t.label}</button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -519,7 +470,7 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
               </div>
               <div className="flex-1">
                 <label className="text-[11.5px] text-muted block mb-1">Default start time (optional)</label>
-                <TimeCombobox
+                <TimeField
                   value={tplDraft.default_start_time}
                   onChange={v => setTplDraft(d => ({ ...d, default_start_time: v }))}
                   placeholder="e.g. 9:00 AM"
@@ -594,7 +545,7 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
                       </div>
                       <div className="flex-1">
                         <label className="text-[11.5px] text-muted block mb-1">Default start (optional)</label>
-                        <TimeCombobox
+                        <TimeField
                           value={editTplDraft.default_start_time}
                           onChange={v => setEditTplDraft(d => ({ ...d, default_start_time: v }))}
                           placeholder="e.g. 9:00 AM"
@@ -805,8 +756,8 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
                             className="w-full bg-ink border border-line rounded-md px-1.5 py-1 text-[11px] text-txt placeholder:text-faint outline-none focus:border-violet resize-none"
                           />
                           <div className="flex gap-1">
-                            <TimeCombobox value={customDraft.start_time} onChange={v => setCustomDraft(d => ({ ...d, start_time: v }))} placeholder="Start" />
-                            <TimeCombobox value={customDraft.end_time}   onChange={v => setCustomDraft(d => ({ ...d, end_time: v }))}   placeholder="End" />
+                            <TimeField value={customDraft.start_time} onChange={v => setCustomDraft(d => ({ ...d, start_time: v }))} placeholder="Start" />
+                            <TimeField value={customDraft.end_time}   onChange={v => setCustomDraft(d => ({ ...d, end_time: v }))}   placeholder="End" />
                           </div>
                           <div className="flex gap-1 mt-0.5">
                             <button type="submit"

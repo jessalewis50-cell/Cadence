@@ -2,8 +2,9 @@
 
 import { useState, useRef, useEffect } from "react";
 import { createClient } from "@/lib/supabase-browser";
-import { to12h, to24h, addMinutes, buildTimeOptions } from "@/lib/time";
+import { to12h, addMinutes } from "@/lib/time";
 import { CAT_COLORS, CAT_LABELS } from "@/lib/constants";
+import TimeField from "@/components/ui/TimeField";
 import type { ScheduleBlock, BlockTemplate, Category } from "@/lib/types";
 
 interface Props {
@@ -24,95 +25,8 @@ interface Draft {
 }
 
 const EMPTY: Draft = { start_time: "", end_time: "", title: "", category: "deep", detail: "" };
-const TIME_OPTIONS = buildTimeOptions();
 
 type AddMode = null | "picker" | "saved" | "new";
-
-function TimeCombobox({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder: string;
-}) {
-  const [open, setOpen]         = useState(false);
-  const [inputVal, setInputVal] = useState(value ? to12h(value) : "");
-  const containerRef = useRef<HTMLDivElement>(null);
-  const listRef      = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) setInputVal(value ? to12h(value) : "");
-  }, [value, open]);
-
-  const filtered = inputVal
-    ? TIME_OPTIONS.filter((t) =>
-        t.label.toLowerCase().startsWith(inputVal.toLowerCase()) ||
-        t.value.startsWith(inputVal)
-      )
-    : TIME_OPTIONS;
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
-  useEffect(() => {
-    if (open && listRef.current && value) {
-      const active = listRef.current.querySelector(`[data-val="${value}"]`) as HTMLElement | null;
-      active?.scrollIntoView({ block: "nearest" });
-    }
-  }, [open, value]);
-
-  return (
-    <div ref={containerRef} className="relative flex-1">
-      <input
-        type="text"
-        value={inputVal}
-        placeholder={placeholder}
-        onChange={(e) => {
-          const v = e.target.value;
-          setInputVal(v);
-          onChange(to24h(v));
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        className="w-full bg-ink border border-line rounded-lg px-2 py-1.5 text-txt text-sm outline-none focus:border-violet transition-colors"
-      />
-      {open && filtered.length > 0 && (
-        <div
-          ref={listRef}
-          className="absolute z-20 top-full left-0 mt-1 w-full max-h-[180px] overflow-y-auto bg-panel border border-line rounded-lg shadow-xl"
-        >
-          {filtered.map((t) => (
-            <button
-              key={t.value}
-              type="button"
-              data-val={t.value}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setInputVal(t.label);
-                onChange(t.value);
-                setOpen(false);
-              }}
-              className={`w-full text-left px-3 py-1.5 text-[13px] hover:bg-panel-2 transition-colors ${
-                t.value === value ? "text-violet font-medium" : "text-txt"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function durationMinutes(start: string, end: string): number {
   const [sh, sm] = start.split(":").map(Number);
@@ -361,12 +275,12 @@ export default function Timeline({ initialBlocks, activeBlockId, onFocus, onBloc
                 className="flex flex-col gap-2 border border-violet/40 rounded-[14px] p-3 bg-violet/5"
               >
                 <div className="flex gap-2">
-                  <TimeCombobox
+                  <TimeField
                     value={editDraft.start_time}
                     onChange={(v) => setEditDraft((d) => ({ ...d, start_time: v }))}
                     placeholder="Start"
                   />
-                  <TimeCombobox
+                  <TimeField
                     value={editDraft.end_time}
                     onChange={(v) => setEditDraft((d) => ({ ...d, end_time: v }))}
                     placeholder="End"
@@ -593,12 +507,12 @@ export default function Timeline({ initialBlocks, activeBlockId, onFocus, onBloc
             className="bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm placeholder:text-faint outline-none focus:border-violet transition-colors resize-none"
           />
           <div className="flex gap-2">
-            <TimeCombobox
+            <TimeField
               value={draft.start_time}
               onChange={(v) => setDraft((d) => ({ ...d, start_time: v }))}
               placeholder="Start"
             />
-            <TimeCombobox
+            <TimeField
               value={draft.end_time}
               onChange={(v) => setDraft((d) => ({ ...d, end_time: v }))}
               placeholder="End"

@@ -14,6 +14,8 @@ export interface ScheduleBlock {
   done: boolean;
   source?: "manual" | "ai" | "template";
   template_id?: string | null; // block_templates.id this copy was stamped from
+  slot_id?: string | null;   // which TemplateSlot this copy was stamped from
+  customized?: boolean;      // one-off tag: edited copies survive template rebuilds
   detail?: string | null;
   created_at: string;
 }
@@ -36,15 +38,22 @@ export interface HabitLog {
   completed: boolean;
 }
 
+export interface TemplateSlot {
+  id: string;                // stable UUID, generated when the slot is added
+  start_time: string;        // "HH:MM"
+  duration_minutes: number;
+}
+
 export interface BlockTemplate {
   id: string;
   user_id: string;
   title: string;
   category: Category;
   activity?: string | null; // free-form label, e.g. "reading", "exercise"
-  duration_minutes: number;
+  duration_minutes: number;  // default duration for new slots / slot-less quick-drops
   default_start_time: string | null; // "HH:MM"
   recurrence_days: number[];          // 0=Sun 1=Mon … 6=Sat
+  slots?: TemplateSlot[];    // occurrences per recurrence day; optional until all writers set it (Task 7 makes it required)
   detail: string | null;
   position: number;
   created_at: string;

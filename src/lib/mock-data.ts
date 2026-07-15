@@ -56,11 +56,11 @@ export function getMockData() {
   ];
 
   const templates: BlockTemplate[] = [
-    { id: "t1", user_id: "guest", title: "Morning deep work",   category: "deep",  duration_minutes: 90,  default_start_time: "09:00", recurrence_days: [1,2,3,4,5],   position: 0, detail: null, created_at: new Date().toISOString() },
-    { id: "t2", user_id: "guest", title: "Movement & stretch",  category: "body",  duration_minutes: 30,  default_start_time: "07:30", recurrence_days: [1,2,3,4,5,6,0], position: 1, detail: null, created_at: new Date().toISOString() },
-    { id: "t3", user_id: "guest", title: "Email & admin",       category: "admin", duration_minutes: 30,  default_start_time: "11:00", recurrence_days: [1,3,5],         position: 2, detail: null, created_at: new Date().toISOString() },
-    { id: "t4", user_id: "guest", title: "Lunch break",         category: "break", duration_minutes: 60,  default_start_time: "12:30", recurrence_days: [1,2,3,4,5],    position: 3, detail: null, created_at: new Date().toISOString() },
-    { id: "t5", user_id: "guest", title: "Afternoon focus",     category: "deep",  duration_minutes: 90,  default_start_time: "14:00", recurrence_days: [1,2,4],         position: 4, detail: null, created_at: new Date().toISOString() },
+    { id: "t1", user_id: "guest", title: "Morning deep work",   category: "deep",  duration_minutes: 90,  default_start_time: "09:00", slots: [{ id: "t1-s1", start_time: "09:00", duration_minutes: 90 }], recurrence_days: [1,2,3,4,5],   position: 0, detail: null, created_at: new Date().toISOString() },
+    { id: "t2", user_id: "guest", title: "Movement & stretch",  category: "body",  duration_minutes: 30,  default_start_time: "07:30", slots: [{ id: "t2-s1", start_time: "07:30", duration_minutes: 30 }], recurrence_days: [1,2,3,4,5,6,0], position: 1, detail: null, created_at: new Date().toISOString() },
+    { id: "t3", user_id: "guest", title: "Email & admin",       category: "admin", duration_minutes: 30,  default_start_time: "11:00", slots: [{ id: "t3-s1", start_time: "11:00", duration_minutes: 30 }], recurrence_days: [1,3,5],         position: 2, detail: null, created_at: new Date().toISOString() },
+    { id: "t4", user_id: "guest", title: "Lunch break",         category: "break", duration_minutes: 60,  default_start_time: "12:30", slots: [{ id: "t4-s1", start_time: "12:30", duration_minutes: 60 }], recurrence_days: [1,2,3,4,5],    position: 3, detail: null, created_at: new Date().toISOString() },
+    { id: "t5", user_id: "guest", title: "Afternoon focus",     category: "deep",  duration_minutes: 90,  default_start_time: "14:00", slots: [{ id: "t5-s1", start_time: "14:00", duration_minutes: 90 }], recurrence_days: [1,2,4],         position: 4, detail: null, created_at: new Date().toISOString() },
   ];
 
   return { blocks, habits, habitLogs, focusSessions, templates };

@@ -7,7 +7,7 @@ const slot = (id: string, start: string, dur = 60): TemplateSlot =>
 
 const tpl = (slots: TemplateSlot[], over: Partial<BlockTemplate> = {}): BlockTemplate => ({
   id: "tpl-1", user_id: "u1", title: "Deep Work", category: "deep",
-  activity: "deep work", duration_minutes: 60, default_start_time: null,
+  activity: "deep work", duration_minutes: 60,
   recurrence_days: [1, 2, 3, 4, 5], detail: null, position: 0,
   created_at: "2026-07-15T00:00:00Z", slots, ...over,
 });

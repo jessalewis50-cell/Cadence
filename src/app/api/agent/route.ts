@@ -1,7 +1,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase-server";
 import Anthropic from "@anthropic-ai/sdk";
 import { toDateStr } from "@/lib/time";
-import { scheduleTemplateBlocks, rebuildTemplateBlocks, validateSlots } from "@/lib/scheduleTemplate";
+import { scheduleTemplateBlocks, rebuildTemplateBlocks, validateSlots, reconcileSlotIds } from "@/lib/scheduleTemplate";
 import type { ScheduleBlock, BlockTemplate, TemplateSlot } from "@/lib/types";
 
 // Runs only on the server. The Anthropic key never leaves this process — it is
@@ -390,9 +390,12 @@ async function executeTool(
       if (input.done !== undefined) updates.done = Boolean(input.done);
 
       // A one-off time change to a template copy tags it so template rebuilds
-      // leave it alone from now on.
+      // leave it alone from now on. Only an actual change to the value counts —
+      // re-sending the same day/time shouldn't tag the copy as customized.
       const movesTimes =
-        updates.day !== undefined || updates.start_time !== undefined || updates.end_time !== undefined;
+        (updates.day !== undefined && updates.day !== existing.day) ||
+        (updates.start_time !== undefined && updates.start_time !== existing.start_time) ||
+        (updates.end_time !== undefined && updates.end_time !== existing.end_time);
       if (existing.template_id && movesTimes) updates.customized = true;
       if (updates.category && !CATEGORIES.has(String(updates.category))) {
         return { content: `Invalid category "${updates.category}".`, isError: true };
@@ -508,9 +511,12 @@ async function executeTool(
         if (u.done !== undefined) updates.done = Boolean(u.done);
 
         // A one-off time change to a template copy tags it so template rebuilds
-        // leave it alone from now on.
+        // leave it alone from now on. Only an actual change to the value counts —
+        // re-sending the same day/time shouldn't tag the copy as customized.
         const movesTimes =
-          updates.day !== undefined || updates.start_time !== undefined || updates.end_time !== undefined;
+          (updates.day !== undefined && updates.day !== existing.day) ||
+          (updates.start_time !== undefined && updates.start_time !== existing.start_time) ||
+          (updates.end_time !== undefined && updates.end_time !== existing.end_time);
         if (existing.template_id && movesTimes) updates.customized = true;
         if (updates.category && !CATEGORIES.has(String(updates.category))) {
           return { content: `Invalid category "${updates.category}".`, isError: true };
@@ -652,11 +658,14 @@ async function executeTool(
       }
       if (input.slots !== undefined) {
         const rawSlots = Array.isArray(input.slots) ? (input.slots as Record<string, unknown>[]) : [];
-        const slots: TemplateSlot[] = rawSlots.map((s) => ({
-          id:               crypto.randomUUID(),
+        const incoming = rawSlots.map((s) => ({
           start_time:       String(s.start_time ?? ""),
           duration_minutes: Number(s.duration_minutes ?? existingTpl.duration_minutes),
         }));
+        // Reuse existing slot ids for matching start times so preserved
+        // customized/done copies still line up with the rebuilt slot list
+        // instead of getting duplicated beside them.
+        const slots = reconcileSlotIds(existingTpl.slots ?? [], incoming);
         const slotErr = validateSlots(slots);
         if (slotErr) return { content: slotErr, isError: true };
         updates.slots = slots;
@@ -677,6 +686,20 @@ async function executeTool(
       }
 
       const updatedTpl = updatedRow as BlockTemplate;
+
+      // Only rebuild the calendar when the template actually recurs (before or
+      // after this update) — for a non-recurring template, rebuilding would
+      // delete untagged upcoming copies and insert nothing, destroying
+      // hand-placed copies on e.g. a plain rename.
+      const affectsCalendar =
+        existingTpl.recurrence_days.length > 0 || updatedTpl.recurrence_days.length > 0;
+      if (!affectsCalendar) {
+        return {
+          content: `Updated saved block ${templateId}.`,
+          change: `Updated routine "${updatedTpl.title}"`,
+        };
+      }
+
       const { deletedIds, created } = await rebuildTemplateBlocks(supabase, updatedTpl, userId);
       return {
         content:

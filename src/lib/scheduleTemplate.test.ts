@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateSlots, planTemplateStamping, planTemplateRebuild } from "@/lib/scheduleTemplate";
+import { validateSlots, planTemplateStamping, planTemplateRebuild, reconcileSlotIds } from "@/lib/scheduleTemplate";
 import type { BlockTemplate, TemplateSlot } from "@/lib/types";
 
 const slot = (id: string, start: string, dur = 60): TemplateSlot =>
@@ -96,5 +96,31 @@ describe("planTemplateRebuild", () => {
     const { deleteIds, inserts } = planTemplateRebuild(t, [], existing, "u1");
     expect(deleteIds.sort()).toEqual(["b1", "b5"]);
     expect(inserts).toHaveLength(0);
+  });
+});
+
+describe("reconcileSlotIds", () => {
+  it("reuses the existing id when start_time matches, even if duration changed", () => {
+    const existing = [slot("s1", "09:00", 60)];
+    const result = reconcileSlotIds(existing, [{ start_time: "09:00", duration_minutes: 90 }]);
+    expect(result).toEqual([{ id: "s1", start_time: "09:00", duration_minutes: 90 }]);
+  });
+
+  it("mints a fresh id for a start_time not present in the existing list", () => {
+    const existing = [slot("s1", "09:00", 60)];
+    const result = reconcileSlotIds(existing, [{ start_time: "13:00", duration_minutes: 30 }]);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).not.toBe("s1");
+    expect(result[0].id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(result[0]).toMatchObject({ start_time: "13:00", duration_minutes: 30 });
+  });
+
+  it("mints fresh ids for all slots when the existing list is empty", () => {
+    const result = reconcileSlotIds([], [
+      { start_time: "09:00", duration_minutes: 60 },
+      { start_time: "13:00", duration_minutes: 30 },
+    ]);
+    expect(result).toHaveLength(2);
+    expect(new Set(result.map(r => r.id)).size).toBe(2);
   });
 });

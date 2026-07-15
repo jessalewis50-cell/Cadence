@@ -486,8 +486,6 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
     }
 
     // Guest: no DB — only reflect the currently visible week in local state.
-    // Functional update so dedupe reads the freshest state (matters when this
-    // runs right after an update clears the old copies).
     const currentWeekStrs = new Set(getWeekDays(weekOffset).map(d => toDateStr(d)));
     setDayBlocks(prev => {
       const dates = matchingDatesForTemplate(tpl.recurrence_days)
@@ -840,7 +838,15 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
                         <span className="w-1.5 h-1.5 rounded-full mt-1 flex-shrink-0" style={{ background: CAT_COLORS[b.category] }} />
                         <div className="flex-1 min-w-0">
                           <p className={`text-[11px] font-medium text-txt leading-tight truncate ${b.done ? "line-through" : ""}`}>{b.title}</p>
-                          <p className="text-[10px] text-faint">{to12h(b.start_time)}</p>
+                          <p className="text-[10px] text-faint">
+                            {to12h(b.start_time)}
+                            {b.customized && b.template_id && (
+                              <span
+                                className="w-1 h-1 rounded-full bg-violet inline-block ml-1 align-middle flex-shrink-0"
+                                title="Moved for this day — won't follow template changes."
+                              />
+                            )}
+                          </p>
                         </div>
                         <button onClick={() => removeBlock(b.id, dayStr)}
                           className="opacity-0 group-hover:opacity-100 text-faint hover:text-magenta transition-all flex-shrink-0">

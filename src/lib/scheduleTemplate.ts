@@ -163,6 +163,24 @@ export async function scheduleTemplateBlocks(
 }
 
 /**
+ * Reconcile an incoming slot list (no ids) against a template's existing
+ * slots, reusing the existing slot's id when start_time matches (then
+ * duration as tie-break is unnecessary — validateSlots guarantees distinct
+ * start times within a list). New start times get fresh UUIDs.
+ */
+export function reconcileSlotIds(
+  existing: TemplateSlot[],
+  incoming: Array<{ start_time: string; duration_minutes: number }>
+): TemplateSlot[] {
+  const byStart = new Map(existing.map((s) => [s.start_time, s.id]));
+  return incoming.map((s) => ({
+    id: byStart.get(s.start_time) ?? crypto.randomUUID(),
+    start_time: s.start_time,
+    duration_minutes: s.duration_minutes,
+  }));
+}
+
+/**
  * Rebuild a template's upcoming copies after the template changed: delete
  * untagged copies from today onward, re-stamp all slots x recurrence days,
  * and leave customized/done copies untouched (no duplicates beside them).

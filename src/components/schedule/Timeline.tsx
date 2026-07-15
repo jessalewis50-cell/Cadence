@@ -129,8 +129,13 @@ export default function Timeline({ initialBlocks, activeBlockId, onFocus, onBloc
 
   async function saveEdit(e: React.FormEvent, block: ScheduleBlock) {
     e.preventDefault();
+    const timeChanged =
+      editDraft.start_time !== block.start_time || editDraft.end_time !== block.end_time;
+    // A one-off time change to a template copy tags it so template rebuilds
+    // leave it alone from now on.
+    const markCustomized = Boolean(block.template_id) && timeChanged;
+
     if (!isGuest) {
-      const timeChanged  = editDraft.start_time !== block.start_time || editDraft.end_time !== block.end_time;
       const titleChanged = editDraft.title !== block.title;
 
       if (timeChanged) {
@@ -150,11 +155,14 @@ export default function Timeline({ initialBlocks, activeBlockId, onFocus, onBloc
         title:      editDraft.title,
         category:   editDraft.category,
         detail:     editDraft.detail.trim() || null,
+        ...(markCustomized ? { customized: true } : {}),
       }).eq("id", block.id);
     }
 
     setBlocks((prev) => prev.map((b) =>
-      b.id === block.id ? { ...b, ...editDraft, detail: editDraft.detail.trim() || null } : b
+      b.id === block.id
+        ? { ...b, ...editDraft, detail: editDraft.detail.trim() || null, customized: markCustomized ? true : b.customized }
+        : b
     ));
     setEditingId(null);
   }
@@ -215,8 +223,11 @@ export default function Timeline({ initialBlocks, activeBlockId, onFocus, onBloc
   async function addFromTemplate(tpl: BlockTemplate) {
     const today     = new Date().toISOString().split("T")[0];
     const maxPos    = blocks.reduce((m, b) => Math.max(m, b.position), -1);
-    const startTime = tpl.default_start_time ?? nextStart(blocks);
-    const endTime   = addMinutes(startTime, tpl.duration_minutes);
+    // Today's quick-add intentionally places ONE block (the first slot's shape),
+    // not the whole slot list — the Blocks page is where full days are stamped.
+    const firstSlot = (tpl.slots ?? [])[0];
+    const startTime = firstSlot?.start_time ?? nextStart(blocks);
+    const endTime   = addMinutes(startTime, firstSlot?.duration_minutes ?? tpl.duration_minutes);
 
     const payload = {
       user_id:    userId ?? "guest",
@@ -331,6 +342,12 @@ export default function Timeline({ initialBlocks, activeBlockId, onFocus, onBloc
             >
               <div className="font-grotesk text-[13px] text-muted tabular-nums leading-tight">
                 {to12h(block.start_time)}
+                {block.customized && block.template_id && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-violet inline-block ml-1.5 align-middle flex-shrink-0"
+                    title="Moved for this day — won't follow template changes."
+                  />
+                )}
                 <span className="block text-[11px] text-faint">{to12h(block.end_time)}</span>
               </div>
 

@@ -2,11 +2,15 @@
 
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase-browser";
-import { to12h, addMinutes, toDateStr } from "@/lib/time";
-import { scheduleTemplateBlocks, matchingDatesForTemplate } from "@/lib/scheduleTemplate";
+import { to12h, addMinutes, toDateStr, timeToMinutes } from "@/lib/time";
+import {
+  scheduleTemplateBlocks, matchingDatesForTemplate,
+  planTemplateStamping, planTemplateRebuild, rebuildTemplateBlocks,
+  validateSlots,
+} from "@/lib/scheduleTemplate";
 import { CAT_COLORS, CAT_LABELS } from "@/lib/constants";
 import TimeField from "@/components/ui/TimeField";
-import type { BlockTemplate, ScheduleBlock, Category } from "@/lib/types";
+import type { BlockTemplate, ScheduleBlock, Category, TemplateSlot } from "@/lib/types";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_FULL  = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -54,15 +58,64 @@ interface Props {
 interface TplDraft {
   title: string;
   category: Category;
-  duration_minutes: number;
-  default_start_time: string;
+  duration_minutes: number;   // default duration for new slot rows / slot-less drop-ins
+  slots: TemplateSlot[];
   recurrence_days: number[];
   detail: string;
 }
 const EMPTY_TPL: TplDraft = {
   title: "", category: "deep", duration_minutes: 60,
-  default_start_time: "", recurrence_days: [], detail: "",
+  slots: [], recurrence_days: [], detail: "",
 };
+
+// ── Slot list editor ─────────────────────────────────────────────────────────
+// Rows are shown in draft order while editing (sorting mid-typing would make
+// rows jump); the save handlers sort by start time before persisting.
+
+function SlotListEditor({ slots, defaultDuration, onChange }: {
+  slots: TemplateSlot[];
+  defaultDuration: number;
+  onChange: (slots: TemplateSlot[]) => void;
+}) {
+  return (
+    <div>
+      <label className="text-[11.5px] text-muted block mb-1">
+        Times — the block appears once per time, every repeat day
+      </label>
+      <div className="flex flex-col gap-1.5">
+        {slots.map((slot, i) => (
+          <div key={slot.id} className="flex gap-2 items-center">
+            <div className="flex-1">
+              <TimeField
+                value={slot.start_time}
+                onChange={v => onChange(slots.map((s, j) => j === i ? { ...s, start_time: v } : s))}
+                placeholder="e.g. 9:00 AM"
+              />
+            </div>
+            <input
+              type="number" min="5" max="480" step="5" required
+              value={slot.duration_minutes}
+              onChange={e => onChange(slots.map((s, j) => j === i ? { ...s, duration_minutes: Number(e.target.value) } : s))}
+              className="w-24 bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm outline-none focus:border-violet"
+              title="Duration (minutes)"
+            />
+            <button type="button" onClick={() => onChange(slots.filter((_, j) => j !== i))}
+              className="text-faint hover:text-magenta transition-colors" title="Remove time">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 6 6 18M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+        ))}
+        <button type="button"
+          onClick={() => onChange([...slots, { id: crypto.randomUUID(), start_time: "", duration_minutes: defaultDuration }])}
+          className="self-start text-[11.5px] text-violet hover:underline">
+          + Add time
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -118,6 +171,11 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
     e.preventDefault();
     setTplSaving(true);
     setTplError(null);
+
+    const slots = [...tplDraft.slots].sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+    const slotErr = validateSlots(slots);
+    if (slotErr) { setTplError(slotErr); setTplSaving(false); return; }
+
     const maxPos = templates.reduce((m, t) => Math.max(m, t.position), -1);
 
     if (!isGuest) {
@@ -128,7 +186,7 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
           title: tplDraft.title,
           category: tplDraft.category,
           duration_minutes: tplDraft.duration_minutes,
-          default_start_time: tplDraft.default_start_time || null,
+          slots,
           recurrence_days: tplDraft.recurrence_days,
           detail: tplDraft.detail.trim() || null,
           position: maxPos + 1,
@@ -152,8 +210,7 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
     }
     // Guest
     const guestTpl: BlockTemplate = {
-      id: crypto.randomUUID(), user_id: "guest", ...tplDraft,
-      default_start_time: tplDraft.default_start_time || null,
+      id: crypto.randomUUID(), user_id: "guest", ...tplDraft, slots,
       detail: tplDraft.detail.trim() || null,
       position: maxPos + 1, created_at: new Date().toISOString(),
     };
@@ -170,7 +227,7 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
 
     const repeating = tpl.recurrence_days.length > 0;
     const message = repeating
-      ? `Delete '${tpl.title}'? This will also remove it from your calendar on all upcoming days (today onward). Past days will be kept. This can't be undone.`
+      ? `Delete '${tpl.title}'? Upcoming copies are removed from your calendar, except ones you've moved or completed. Past days will be kept. This can't be undone.`
       : `Delete '${tpl.title}'? This can't be undone.`;
     if (!window.confirm(message)) return;
 
@@ -179,12 +236,13 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
 
     // Remove this template's upcoming calendar copies from local state so the
     // week view updates immediately. Matched by template_id on today-or-later
-    // days; past days and other templates' blocks stay.
+    // days; past days, customized/completed copies, and other templates'
+    // blocks stay.
     setDayBlocks(prev => {
       const next: Record<string, ScheduleBlock[]> = {};
       for (const [day, blocks] of Object.entries(prev)) {
         next[day] = day >= todayStr
-          ? blocks.filter(b => b.template_id !== id)
+          ? blocks.filter(b => b.template_id !== id || b.customized || b.done)
           : blocks;
       }
       return next;
@@ -192,13 +250,16 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
 
     if (!isGuest) {
       await supabase.from("block_templates").delete().eq("id", id);
-      // Delete only this template's upcoming copies (matched by template_id) —
-      // never past history, never other sources.
+      // Delete only this template's upcoming, untagged copies (matched by
+      // template_id) — never past history, never customized/completed copies,
+      // never other sources.
       await supabase
         .from("schedule_blocks")
         .delete()
         .eq("user_id", userId!)
         .eq("template_id", id)
+        .eq("customized", false)
+        .eq("done", false)
         .gte("day", todayStr);
     }
   }
@@ -206,12 +267,12 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
   function startEditTpl(tpl: BlockTemplate) {
     setEditingTplId(tpl.id);
     setEditTplDraft({
-      title:              tpl.title,
-      category:           tpl.category,
-      duration_minutes:   tpl.duration_minutes,
-      default_start_time: tpl.default_start_time ?? "",
-      recurrence_days:    tpl.recurrence_days,
-      detail:             tpl.detail ?? "",
+      title:            tpl.title,
+      category:         tpl.category,
+      duration_minutes: tpl.duration_minutes,
+      slots:            (tpl.slots ?? []).map(s => ({ ...s })),
+      recurrence_days:  tpl.recurrence_days,
+      detail:           tpl.detail ?? "",
     });
     setEditTplError(null);
   }
@@ -223,10 +284,14 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
     const original = templates.find(t => t.id === editingTplId);
     if (!original) return;
 
+    const slots = [...editTplDraft.slots].sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+    const slotErr = validateSlots(slots);
+    if (slotErr) { setEditTplError(slotErr); return; }
+
     const updatedTpl: BlockTemplate = {
       ...original,
       ...editTplDraft,
-      default_start_time: editTplDraft.default_start_time || null,
+      slots,
       detail: editTplDraft.detail.trim() || null,
     };
 
@@ -236,7 +301,7 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
       original.recurrence_days.length > 0 || updatedTpl.recurrence_days.length > 0;
     if (
       affectsCalendar &&
-      !window.confirm(`Update '${updatedTpl.title}' on all upcoming days? Past days stay unchanged.`)
+      !window.confirm(`Update '${updatedTpl.title}' on all upcoming days? Copies you've moved or completed are kept; past days stay unchanged.`)
     ) {
       return;
     }
@@ -248,12 +313,12 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
       const { error } = await supabase
         .from("block_templates")
         .update({
-          title:              editTplDraft.title,
-          category:           editTplDraft.category,
-          duration_minutes:   editTplDraft.duration_minutes,
-          default_start_time: editTplDraft.default_start_time || null,
-          recurrence_days:    editTplDraft.recurrence_days,
-          detail:             editTplDraft.detail.trim() || null,
+          title:            editTplDraft.title,
+          category:         editTplDraft.category,
+          duration_minutes: editTplDraft.duration_minutes,
+          slots,
+          recurrence_days:  editTplDraft.recurrence_days,
+          detail:           editTplDraft.detail.trim() || null,
         })
         .eq("id", editingTplId);
       if (error) {
@@ -269,29 +334,48 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
     setEditTplSaving(false);
 
     // Rebuild this template's UPCOMING copies so today-onward matches the new
-    // time, duration, and days. Past copies are preserved.
+    // slots and days. Customized and completed copies are preserved; past
+    // copies untouched.
     if (affectsCalendar) {
+      const currentWeekStrs = new Set(getWeekDays(weekOffset).map(d => toDateStr(d)));
+
       if (!isGuest) {
-        await supabase
-          .from("schedule_blocks")
-          .delete()
-          .eq("user_id", userId!)
-          .eq("template_id", updatedTpl.id)
-          .gte("day", todayStr);
+        const { deletedIds, created } = await rebuildTemplateBlocks(supabase, updatedTpl, userId!);
+        const deleted = new Set(deletedIds);
+        setDayBlocks(prev => {
+          const next: Record<string, ScheduleBlock[]> = {};
+          for (const [day, blocks] of Object.entries(prev)) {
+            next[day] = blocks.filter(b => !deleted.has(b.id));
+          }
+          for (const b of created) {
+            if (!currentWeekStrs.has(b.day)) continue;
+            next[b.day] = [...(next[b.day] ?? []), b].sort((a, c) => a.start_time.localeCompare(c.start_time));
+          }
+          return next;
+        });
+        return;
       }
-      // Clear upcoming copies from local state first, then regenerate — the
-      // shared scheduler skips days that already have a copy, so clearing is
-      // what lets the new time/days take effect.
+
+      // Guest: run the same rebuild plan against local state.
       setDayBlocks(prev => {
+        const upcoming = Object.entries(prev).flatMap(([day, bs]) =>
+          day >= todayStr ? bs.filter(b => b.template_id === updatedTpl.id) : []
+        );
+        const { deleteIds, inserts } = planTemplateRebuild(
+          updatedTpl, matchingDatesForTemplate(updatedTpl.recurrence_days), upcoming, "guest"
+        );
+        const del = new Set(deleteIds);
         const next: Record<string, ScheduleBlock[]> = {};
-        for (const [day, blocks] of Object.entries(prev)) {
-          next[day] = day >= todayStr
-            ? blocks.filter(b => b.template_id !== updatedTpl.id)
-            : blocks;
+        for (const [day, bs] of Object.entries(prev)) {
+          next[day] = bs.filter(b => !del.has(b.id));
+        }
+        for (const row of inserts) {
+          if (!currentWeekStrs.has(row.day)) continue;
+          const local: ScheduleBlock = { ...row, id: crypto.randomUUID(), created_at: new Date().toISOString() };
+          next[row.day] = [...(next[row.day] ?? []), local].sort((a, c) => a.start_time.localeCompare(c.start_time));
         }
         return next;
       });
-      await autoScheduleTemplate(updatedTpl);
     }
   }
 
@@ -299,32 +383,42 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
 
   async function addTemplateToDay(template: BlockTemplate, dayStr: string) {
     const existing = dayBlocks[dayStr] ?? [];
-    const startTime = template.default_start_time ?? nextStartTime(existing);
-    const endTime   = addMinutes(startTime, template.duration_minutes);
-    const maxPos    = existing.reduce((m, b) => Math.max(m, b.position), -1);
+    const maxPos   = existing.reduce((m, b) => Math.max(m, b.position), -1);
+    const slots    = template.slots ?? [];
 
-    const newBlock: Omit<ScheduleBlock, "id" | "created_at"> = {
-      user_id: userId ?? "guest",
-      day: dayStr,
-      start_time: startTime,
-      end_time: endTime,
-      title: template.title,
-      category: template.category,
-      position: maxPos + 1,
-      done: false,
-      source: "template" as const,
-      template_id: template.id,
-    };
+    let rows: Omit<ScheduleBlock, "id" | "created_at">[];
+    if (slots.length > 0) {
+      // Stamp every slot onto this day, skipping (day, slot) pairs already present.
+      rows = planTemplateStamping(template, [new Date(`${dayStr}T12:00:00`)], existing, userId ?? "guest")
+        .map((r, i) => ({ ...r, position: maxPos + 1 + i }));
+    } else {
+      // Slot-less template: one block at the next free time, default duration.
+      const startTime = nextStartTime(existing);
+      rows = [{
+        user_id: userId ?? "guest",
+        day: dayStr,
+        start_time: startTime,
+        end_time: addMinutes(startTime, template.duration_minutes),
+        title: template.title,
+        category: template.category,
+        position: maxPos + 1,
+        done: false,
+        source: "template" as const,
+        template_id: template.id,
+      }];
+    }
+
+    if (rows.length === 0) { setAddingTo(null); return; } // every slot already on this day
 
     if (!isGuest) {
       const { data, error } = await supabase
-        .from("schedule_blocks").insert(newBlock).select().single();
+        .from("schedule_blocks").insert(rows).select();
       if (!error && data) {
-        setDayBlocks(prev => ({ ...prev, [dayStr]: [...(prev[dayStr] ?? []), data as ScheduleBlock].sort((a, b) => a.start_time.localeCompare(b.start_time)) }));
+        setDayBlocks(prev => ({ ...prev, [dayStr]: [...(prev[dayStr] ?? []), ...(data as ScheduleBlock[])].sort((a, b) => a.start_time.localeCompare(b.start_time)) }));
       }
     } else {
-      const local: ScheduleBlock = { ...newBlock, id: crypto.randomUUID(), created_at: new Date().toISOString() };
-      setDayBlocks(prev => ({ ...prev, [dayStr]: [...(prev[dayStr] ?? []), local].sort((a, b) => a.start_time.localeCompare(b.start_time)) }));
+      const locals: ScheduleBlock[] = rows.map(r => ({ ...r, id: crypto.randomUUID(), created_at: new Date().toISOString() }));
+      setDayBlocks(prev => ({ ...prev, [dayStr]: [...(prev[dayStr] ?? []), ...locals].sort((a, b) => a.start_time.localeCompare(b.start_time)) }));
     }
     setAddingTo(null);
   }
@@ -370,10 +464,10 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
   // Called whenever a template is created or updated with recurrence_days set.
 
   async function autoScheduleTemplate(tpl: BlockTemplate) {
-    if (tpl.recurrence_days.length === 0 || !tpl.default_start_time) return;
+    if (tpl.recurrence_days.length === 0 || (tpl.slots ?? []).length === 0) return;
 
     if (!isGuest) {
-      // Shared logic: creates the recurring blocks (with dedupe + source:"template").
+      // Shared logic: creates the recurring blocks (slot-aware, ID-deduped).
       const created = await scheduleTemplateBlocks(supabase, tpl, userId!);
       if (created.length === 0) return;
 
@@ -396,25 +490,16 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
     // runs right after an update clears the old copies).
     const currentWeekStrs = new Set(getWeekDays(weekOffset).map(d => toDateStr(d)));
     setDayBlocks(prev => {
+      const dates = matchingDatesForTemplate(tpl.recurrence_days)
+        .filter(d => currentWeekStrs.has(toDateStr(d)));
+      const existing = dates.flatMap(d =>
+        (prev[toDateStr(d)] ?? []).filter(b => b.template_id === tpl.id)
+      );
+      const rows = planTemplateStamping(tpl, dates, existing, "guest");
       const next = { ...prev };
-      const dates = matchingDatesForTemplate(tpl.recurrence_days).filter(d => {
-        const ds = toDateStr(d);
-        return currentWeekStrs.has(ds) && !(next[ds] ?? []).some(b => b.title === tpl.title);
-      });
-      for (const d of dates) {
-        const ds = toDateStr(d);
-        const block: ScheduleBlock = {
-          id: crypto.randomUUID(), user_id: "guest",
-          day: ds,
-          start_time: tpl.default_start_time!,
-          end_time: addMinutes(tpl.default_start_time!, tpl.duration_minutes),
-          title: tpl.title, category: tpl.category,
-          activity: tpl.activity ?? null,
-          detail: tpl.detail ?? null, position: 0, done: false,
-          source: "template" as const, template_id: tpl.id,
-          created_at: new Date().toISOString(),
-        };
-        next[ds] = [...(next[ds] ?? []), block].sort((a, c) => a.start_time.localeCompare(c.start_time));
+      for (const row of rows) {
+        const local: ScheduleBlock = { ...row, id: crypto.randomUUID(), created_at: new Date().toISOString() };
+        next[row.day] = [...(next[row.day] ?? []), local].sort((a, c) => a.start_time.localeCompare(c.start_time));
       }
       return next;
     });
@@ -425,21 +510,31 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
   async function scheduleWeek() {
     const created: ScheduleBlock[] = [];
     for (const day of weekDays) {
-      const dayStr  = toDateStr(day);
-      const dayNum  = day.getDay(); // 0=Sun
-      const existing = dayBlocks[dayStr] ?? [];
+      const dayStr = toDateStr(day);
+      const dayNum = day.getDay(); // 0=Sun
       for (const tpl of templates) {
         if (!tpl.recurrence_days.includes(dayNum)) continue;
-        if (existing.some(b => b.title === tpl.title)) continue; // already there
-        const startTime = tpl.default_start_time ?? nextStartTime([...existing, ...created.filter(b => b.day === dayStr)]);
-        const endTime   = addMinutes(startTime, tpl.duration_minutes);
-        const maxPos    = [...existing, ...created.filter(b => b.day === dayStr)].reduce((m, b) => Math.max(m, b.position), -1);
-        const newBlock  = { user_id: userId ?? "guest", day: dayStr, start_time: startTime, end_time: endTime, title: tpl.title, category: tpl.category, position: maxPos + 1, done: false, source: "template" as const, template_id: tpl.id };
-        if (!isGuest) {
-          const { data } = await supabase.from("schedule_blocks").insert(newBlock).select().single();
-          if (data) created.push(data as ScheduleBlock);
+        const existing = [...(dayBlocks[dayStr] ?? []), ...created.filter(b => b.day === dayStr)];
+        const maxPos   = existing.reduce((m, b) => Math.max(m, b.position), -1);
+        const slots    = tpl.slots ?? [];
+
+        let rows: Omit<ScheduleBlock, "id" | "created_at">[];
+        if (slots.length > 0) {
+          rows = planTemplateStamping(tpl, [day], existing, userId ?? "guest")
+            .map((r, i) => ({ ...r, position: maxPos + 1 + i }));
         } else {
-          created.push({ ...newBlock, id: crypto.randomUUID(), created_at: new Date().toISOString() });
+          if (existing.some(b => b.template_id === tpl.id)) continue; // already there
+          const startTime = nextStartTime(existing);
+          rows = [{ user_id: userId ?? "guest", day: dayStr, start_time: startTime, end_time: addMinutes(startTime, tpl.duration_minutes), title: tpl.title, category: tpl.category, position: maxPos + 1, done: false, source: "template" as const, template_id: tpl.id }];
+        }
+
+        for (const row of rows) {
+          if (!isGuest) {
+            const { data } = await supabase.from("schedule_blocks").insert(row).select().single();
+            if (data) created.push(data as ScheduleBlock);
+          } else {
+            created.push({ ...row, id: crypto.randomUUID(), created_at: new Date().toISOString() });
+          }
         }
       }
     }
@@ -500,9 +595,9 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
               className="w-full bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm placeholder:text-faint outline-none focus:border-violet transition-colors resize-none"
             />
 
-            <div className="flex gap-2 items-center">
-              <div className="flex-1">
-                <label className="text-[11.5px] text-muted block mb-1">Duration (minutes)</label>
+            <div className="flex gap-2 items-start">
+              <div className="w-40">
+                <label className="text-[11.5px] text-muted block mb-1">Default duration (min)</label>
                 <input
                   type="number" min="5" max="480" step="5" required
                   value={tplDraft.duration_minutes}
@@ -511,11 +606,10 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[11.5px] text-muted block mb-1">Default start time (optional)</label>
-                <TimeField
-                  value={tplDraft.default_start_time}
-                  onChange={v => setTplDraft(d => ({ ...d, default_start_time: v }))}
-                  placeholder="e.g. 9:00 AM"
+                <SlotListEditor
+                  slots={tplDraft.slots}
+                  defaultDuration={tplDraft.duration_minutes}
+                  onChange={slots => setTplDraft(d => ({ ...d, slots }))}
                 />
               </div>
             </div>
@@ -576,9 +670,9 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
                       onChange={e => setEditTplDraft(d => ({ ...d, detail: e.target.value }))}
                       className="w-full bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm placeholder:text-faint outline-none focus:border-violet transition-colors resize-none"
                     />
-                    <div className="flex gap-2 items-center">
-                      <div className="flex-1">
-                        <label className="text-[11.5px] text-muted block mb-1">Duration (min)</label>
+                    <div className="flex gap-2 items-start">
+                      <div className="w-40">
+                        <label className="text-[11.5px] text-muted block mb-1">Default duration (min)</label>
                         <input type="number" min="5" max="480" step="5" required
                           value={editTplDraft.duration_minutes}
                           onChange={e => setEditTplDraft(d => ({ ...d, duration_minutes: Number(e.target.value) }))}
@@ -586,11 +680,10 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
                         />
                       </div>
                       <div className="flex-1">
-                        <label className="text-[11.5px] text-muted block mb-1">Default start (optional)</label>
-                        <TimeField
-                          value={editTplDraft.default_start_time}
-                          onChange={v => setEditTplDraft(d => ({ ...d, default_start_time: v }))}
-                          placeholder="e.g. 9:00 AM"
+                        <SlotListEditor
+                          slots={editTplDraft.slots}
+                          defaultDuration={editTplDraft.duration_minutes}
+                          onChange={slots => setEditTplDraft(d => ({ ...d, slots }))}
                         />
                       </div>
                     </div>
@@ -651,9 +744,12 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
                   </div>
 
                   <div className="flex items-center gap-2 text-[11.5px] text-muted flex-wrap">
-                    <span>{tpl.duration_minutes} min</span>
-                    {tpl.default_start_time && (
-                      <><span className="text-faint">·</span><span>{to12h(tpl.default_start_time)}</span></>
+                    {(tpl.slots ?? []).length === 0 ? (
+                      <span>{tpl.duration_minutes} min</span>
+                    ) : (
+                      <span>
+                        {(tpl.slots ?? []).map(s => `${to12h(s.start_time)} · ${s.duration_minutes}m`).join(", ")}
+                      </span>
                     )}
                   </div>
 

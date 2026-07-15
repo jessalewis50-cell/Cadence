@@ -51,7 +51,7 @@ export interface BlockTemplate {
   category: Category;
   activity?: string | null; // free-form label, e.g. "reading", "exercise"
   duration_minutes: number;  // default duration for new slots / slot-less quick-drops
-  default_start_time: string | null; // "HH:MM"
+  default_start_time?: string | null; // "HH:MM" — legacy single-slot field, unused by writers that set `slots`
   recurrence_days: number[];          // 0=Sun 1=Mon … 6=Sat
   slots?: TemplateSlot[];    // occurrences per recurrence day; optional until all writers set it (Task 7 makes it required)
   detail: string | null;

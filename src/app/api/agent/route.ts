@@ -1,8 +1,8 @@
 import { createClient, createServiceClient } from "@/lib/supabase-server";
 import Anthropic from "@anthropic-ai/sdk";
 import { toDateStr } from "@/lib/time";
-import { scheduleTemplateBlocks } from "@/lib/scheduleTemplate";
-import type { ScheduleBlock, BlockTemplate } from "@/lib/types";
+import { scheduleTemplateBlocks, rebuildTemplateBlocks, validateSlots } from "@/lib/scheduleTemplate";
+import type { ScheduleBlock, BlockTemplate, TemplateSlot } from "@/lib/types";
 
 // Runs only on the server. The Anthropic key never leaves this process — it is
 // read from the environment and is not exposed to the browser.
@@ -163,25 +163,73 @@ const tools: Anthropic.Tool[] = [
     name: "create_saved_block",
     description:
       "Save a reusable block template (a \"saved block\"), used for recurring routines. " +
-      "If recurrence_days and default_start_time are provided, the routine is automatically " +
-      "placed on the calendar for the next 4 weeks — do NOT also create individual blocks for " +
-      "those days, that would duplicate them.",
+      "A saved block can occur MULTIPLE times per day via `slots` — each slot is one occurrence " +
+      "(start_time + duration_minutes) and every copy shares the block's title. If recurrence_days " +
+      "and at least one slot are provided, the routine is automatically placed on the calendar for " +
+      "the next 4 weeks — do NOT also create individual blocks for those days, that would duplicate them.",
     input_schema: {
       type: "object",
       properties: {
-        title:              { type: "string" },
-        category:           { type: "string", enum: ["deep", "body", "break", "admin"] },
-        duration_minutes:   { type: "integer", description: "Default length in minutes" },
-        default_start_time: { type: "string", description: "Optional default start, HH:MM" },
-        recurrence_days:    {
+        title:            { type: "string" },
+        category:         { type: "string", enum: ["deep", "body", "break", "admin"] },
+        duration_minutes: { type: "integer", description: "Default length in minutes (used when a slot omits its own)" },
+        slots: {
+          type: "array",
+          description: "Occurrences per recurrence day. E.g. three deep-work sessions = three slots.",
+          items: {
+            type: "object",
+            properties: {
+              start_time:       { type: "string", description: "HH:MM (24h)" },
+              duration_minutes: { type: "integer", description: "Length of this occurrence in minutes" },
+            },
+            required: ["start_time"],
+          },
+        },
+        recurrence_days: {
           type: "array",
           items: { type: "integer", minimum: 0, maximum: 6 },
           description: "Days it recurs, 0=Sun … 6=Sat",
         },
-        activity:           { type: "string", description: "Short activity label" },
-        detail:             { type: "string" },
+        activity: { type: "string", description: "Short activity label" },
+        detail:   { type: "string" },
       },
       required: ["title", "category", "duration_minutes"],
+    },
+  },
+  {
+    name: "update_saved_block",
+    description:
+      "Update a saved block (routine template) by id — a PERMANENT routine change. Only include the " +
+      "fields to change; `slots` REPLACES the full slot list. Changing slots or recurrence_days rebuilds " +
+      "the calendar for the next 4 weeks; copies the user moved for a single day (customized) and " +
+      "completed copies are preserved. For a single-day time change use update_block instead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        template_id: { type: "string" },
+        title:       { type: "string" },
+        category:    { type: "string", enum: ["deep", "body", "break", "admin"] },
+        activity:    { type: "string" },
+        detail:      { type: "string" },
+        recurrence_days: {
+          type: "array",
+          items: { type: "integer", minimum: 0, maximum: 6 },
+          description: "Days it recurs, 0=Sun … 6=Sat",
+        },
+        slots: {
+          type: "array",
+          description: "REPLACES the full slot list. Each slot is one occurrence per recurrence day.",
+          items: {
+            type: "object",
+            properties: {
+              start_time:       { type: "string", description: "HH:MM (24h)" },
+              duration_minutes: { type: "integer" },
+            },
+            required: ["start_time", "duration_minutes"],
+          },
+        },
+      },
+      required: ["template_id"],
     },
   },
   {
@@ -232,7 +280,7 @@ Today is ${toDateStr(new Date())}. The current week runs ${weekStart} (Mon) to $
 THIS WEEK'S SCHEDULE (existing blocks):
 ${JSON.stringify(blocks, null, 2)}
 
-Each block has a "source": "manual" = the user created it by hand, "ai" = you created it, "template" = generated from a recurring saved block. Treat any source that is not "ai" or "template" as a manual block.
+Each block has a "source": "manual" = the user created it by hand, "ai" = you created it, "template" = generated from a recurring saved block. Treat any source that is not "ai" or "template" as a manual block. A block with "customized": true is a template copy the user deliberately moved for that day — treat it like a manual block and do not "fix" its times back to the template.
 
 WEEKLY GOALS:
 ${JSON.stringify(goals, null, 2)}
@@ -252,10 +300,15 @@ GUIDELINES:
   • If the user REMOVES them, proceed normally.
 - When a request needs more than one calendar change, decide the full set of changes first, then apply them in a single batch using create_blocks / update_blocks / delete_blocks. Do NOT call the single-block tools repeatedly. Use single-block tools only for a genuine one-off change.
 - RECURRING routine vs ONE-OFF event — choose the right tool:
-  • Recurring ("every day", "daily", "each weekday", "on Mondays and Wednesdays", "my usual morning routine"): use create_saved_block. Set recurrence_days to the days it repeats, plus a default_start_time and duration_minutes. The saved block automatically fills the calendar for the next 4 weeks — do NOT also create individual one-off blocks for those days, that would duplicate them.
+  • Recurring ("every day", "daily", "each weekday", "on Mondays and Wednesdays", "my usual morning routine"): use create_saved_block. Set recurrence_days to the days it repeats, plus one slot per daily occurrence (start_time + duration_minutes). The saved block automatically fills the calendar for the next 4 weeks — do NOT also create individual one-off blocks for those days, that would duplicate them.
+  • A routine that happens SEVERAL times a day (e.g. three deep-work sessions, two breaks) is ONE saved block with SEVERAL slots — never several saved blocks with numbered or renamed titles. All copies share the block's title.
   • Day encoding for recurrence_days: 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday. "weekdays" = [1,2,3,4,5]; "every day"/"daily" = [0,1,2,3,4,5,6].
-  • A recurring saved block MUST include a default_start_time and a duration_minutes, or it won't appear on the calendar.
+  • A recurring saved block MUST include recurrence_days and at least one slot, or it won't appear on the calendar.
   • One-off event ("dentist Thursday at 3pm"): use create_block for a single block, as before.
+- ONE-DAY change vs PERMANENT routine change:
+  • "Push my deep work back an hour today" → update_block / update_blocks on that day's blocks. This marks them customized: they stop following the saved block from then on.
+  • "Move my deep work to mornings from now on" → update_saved_block. It rebuilds upcoming days but preserves copies the user customized or completed.
+  • If the request is ambiguous about one day vs always, ask before changing anything.
 - WHEN BUILDING A FULL DAILY ROUTINE (the user describes their whole day):
   • FIRST outline the ENTIRE day from wake-up to bedtime — in your reasoning, map every block start-to-end — BEFORE creating any blocks. Do not start placing blocks until the whole day is mapped, so no part of the day (especially the evening) gets dropped.
   • Honor every explicit time the user gives, exactly: wake-up, start times, work hours, activity durations, and bedtime. Whatever hours the user states are the hours to use.
@@ -335,6 +388,12 @@ async function executeTool(
         if (input[field] !== undefined) updates[field] = input[field];
       }
       if (input.done !== undefined) updates.done = Boolean(input.done);
+
+      // A one-off time change to a template copy tags it so template rebuilds
+      // leave it alone from now on.
+      const movesTimes =
+        updates.day !== undefined || updates.start_time !== undefined || updates.end_time !== undefined;
+      if (existing.template_id && movesTimes) updates.customized = true;
       if (updates.category && !CATEGORIES.has(String(updates.category))) {
         return { content: `Invalid category "${updates.category}".`, isError: true };
       }
@@ -447,6 +506,12 @@ async function executeTool(
           if (u[field] !== undefined) updates[field] = u[field];
         }
         if (u.done !== undefined) updates.done = Boolean(u.done);
+
+        // A one-off time change to a template copy tags it so template rebuilds
+        // leave it alone from now on.
+        const movesTimes =
+          updates.day !== undefined || updates.start_time !== undefined || updates.end_time !== undefined;
+        if (existing.template_id && movesTimes) updates.customized = true;
         if (updates.category && !CATEGORIES.has(String(updates.category))) {
           return { content: `Invalid category "${updates.category}".`, isError: true };
         }
@@ -509,18 +574,28 @@ async function executeTool(
         ? (input.recurrence_days as unknown[]).map(Number).filter((n) => n >= 0 && n <= 6)
         : [];
 
+      const defaultDuration = Number(input.duration_minutes ?? 60);
+      const rawSlots = Array.isArray(input.slots) ? (input.slots as Record<string, unknown>[]) : [];
+      const slots: TemplateSlot[] = rawSlots.map((s) => ({
+        id:               crypto.randomUUID(),
+        start_time:       String(s.start_time ?? ""),
+        duration_minutes: Number(s.duration_minutes ?? defaultDuration),
+      }));
+      const slotErr = validateSlots(slots);
+      if (slotErr) return { content: slotErr, isError: true };
+
       const { data, error } = await supabase
         .from("block_templates")
         .insert({
-          user_id:            userId,
-          title:              String(input.title ?? ""),
+          user_id:          userId,
+          title:            String(input.title ?? ""),
           category,
-          duration_minutes:   Number(input.duration_minutes ?? 60),
-          default_start_time: input.default_start_time ? String(input.default_start_time) : null,
-          recurrence_days:    recurrence,
-          activity:           input.activity ? String(input.activity) : null,
-          detail:             input.detail ? String(input.detail) : null,
-          position:           0,
+          duration_minutes: defaultDuration,
+          slots,
+          recurrence_days:  recurrence,
+          activity:         input.activity ? String(input.activity) : null,
+          detail:           input.detail ? String(input.detail) : null,
+          position:         0,
         })
         .select()
         .single();
@@ -545,6 +620,70 @@ async function executeTool(
       return {
         content: `Saved block template ${template.id}; scheduled ${scheduled} recurring block(s).`,
         change,
+      };
+    }
+
+    case "update_saved_block": {
+      const templateId = String(input.template_id ?? "");
+      const { data: existingTpl, error: tplErr } = await supabase
+        .from("block_templates")
+        .select("*")
+        .eq("id", templateId)
+        .eq("user_id", userId)
+        .single<BlockTemplate>();
+      if (tplErr || !existingTpl) {
+        return { content: `Saved block ${templateId} not found.`, isError: true };
+      }
+
+      const updates: Record<string, unknown> = {};
+      if (input.title !== undefined)    updates.title = String(input.title);
+      if (input.activity !== undefined) updates.activity = String(input.activity);
+      if (input.detail !== undefined)   updates.detail = String(input.detail);
+      if (input.category !== undefined) {
+        if (!CATEGORIES.has(String(input.category))) {
+          return { content: `Invalid category "${input.category}".`, isError: true };
+        }
+        updates.category = String(input.category);
+      }
+      if (input.recurrence_days !== undefined) {
+        updates.recurrence_days = Array.isArray(input.recurrence_days)
+          ? (input.recurrence_days as unknown[]).map(Number).filter((n) => n >= 0 && n <= 6)
+          : [];
+      }
+      if (input.slots !== undefined) {
+        const rawSlots = Array.isArray(input.slots) ? (input.slots as Record<string, unknown>[]) : [];
+        const slots: TemplateSlot[] = rawSlots.map((s) => ({
+          id:               crypto.randomUUID(),
+          start_time:       String(s.start_time ?? ""),
+          duration_minutes: Number(s.duration_minutes ?? existingTpl.duration_minutes),
+        }));
+        const slotErr = validateSlots(slots);
+        if (slotErr) return { content: slotErr, isError: true };
+        updates.slots = slots;
+      }
+      if (Object.keys(updates).length === 0) {
+        return { content: "No changes provided.", isError: true };
+      }
+
+      const { data: updatedRow, error: updErr } = await supabase
+        .from("block_templates")
+        .update(updates)
+        .eq("id", templateId)
+        .eq("user_id", userId)
+        .select()
+        .single();
+      if (updErr || !updatedRow) {
+        return { content: `Failed to update saved block: ${updErr?.message ?? "unknown error"}`, isError: true };
+      }
+
+      const updatedTpl = updatedRow as BlockTemplate;
+      const { deletedIds, created } = await rebuildTemplateBlocks(supabase, updatedTpl, userId);
+      return {
+        content:
+          `Updated saved block ${templateId}; rebuilt upcoming calendar ` +
+          `(removed ${deletedIds.length}, added ${created.length}). ` +
+          `Customized and completed copies were preserved as-is.`,
+        change: `Updated routine "${updatedTpl.title}"`,
       };
     }
 

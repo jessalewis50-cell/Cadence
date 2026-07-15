@@ -3,8 +3,9 @@
 import { useState, useEffect } from "react";
 import Timeline from "@/components/schedule/Timeline";
 import PomodoroTimer from "@/components/focus/PomodoroTimer";
-import HabitList from "@/components/habits/HabitList";
 import WeeklyBars from "@/components/progress/WeeklyBars";
+import AgentChat from "@/components/agent/AgentChat";
+import TodayActivity from "@/components/activity/TodayActivity";
 import WeekView from "@/components/week/WeekView";
 import MonthView from "@/components/month/MonthView";
 import DebriefModal from "@/components/debrief/DebriefModal";
@@ -14,7 +15,6 @@ import { toDateStr } from "@/lib/time";
 interface Props {
   initialBlocks: ScheduleBlock[];
   habits: Habit[];
-  initialTodayLogs: HabitLog[];
   allLogs: HabitLog[];
   focusSessions: FocusSession[];
   isGuest: boolean;
@@ -81,7 +81,6 @@ function shouldShowDebrief(blocks: ScheduleBlock[]): boolean {
 export default function TodayClient({
   initialBlocks,
   habits,
-  initialTodayLogs,
   allLogs,
   focusSessions,
   isGuest,
@@ -171,6 +170,7 @@ export default function TodayClient({
           />
 
           <div className="flex flex-col gap-[22px]">
+            <AgentChat />
             <div className="grid grid-cols-2 gap-[22px] items-start">
               <PomodoroTimer
                 activeBlock={activeBlock}
@@ -180,13 +180,7 @@ export default function TodayClient({
               />
               <WeeklyBars bars={bars} />
             </div>
-            <HabitList
-              habits={habits}
-              initialTodayLogs={initialTodayLogs}
-              allLogs={allLogs}
-              isGuest={isGuest}
-              userId={userId}
-            />
+            <TodayActivity blocks={blocks} />
           </div>
         </div>
       </div>

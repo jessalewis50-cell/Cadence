@@ -93,9 +93,6 @@ export default async function TodayPage({
     hasDebrief    = !!debriefRes.data;
   }
 
-  const todayStr  = toDateStr(new Date());
-  const todayLogs = habitLogs.filter((l) => l.day === todayStr);
-
   const h = new Date().getHours();
   const greeting =
     h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
@@ -140,7 +137,6 @@ export default async function TodayPage({
         <TodayClient
           initialBlocks={blocks}
           habits={habits}
-          initialTodayLogs={todayLogs}
           allLogs={habitLogs}
           focusSessions={focusSessions}
           isGuest={isGuest}

@@ -9,9 +9,11 @@ export interface ScheduleBlock {
   end_time: string;
   title: string;
   category: Category;
+  activity?: string | null; // free-form label, e.g. "reading", "exercise"
   position: number;
   done: boolean;
   source?: "manual" | "ai" | "template";
+  template_id?: string | null; // block_templates.id this copy was stamped from
   detail?: string | null;
   created_at: string;
 }
@@ -20,6 +22,7 @@ export interface Habit {
   id: string;
   user_id: string;
   name: string;
+  activity?: string | null; // matches schedule blocks by activity; falls back to name
   position: number;
   archived: boolean;
   created_at: string;
@@ -38,6 +41,7 @@ export interface BlockTemplate {
   user_id: string;
   title: string;
   category: Category;
+  activity?: string | null; // free-form label, e.g. "reading", "exercise"
   duration_minutes: number;
   default_start_time: string | null; // "HH:MM"
   recurrence_days: number[];          // 0=Sun 1=Mon … 6=Sat
@@ -90,6 +94,14 @@ export interface DailyInsight {
   generated_at: string;
   insight: string;
   confidence: "low" | "medium" | "high" | null;
+  created_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  user_id: string;
+  role: "user" | "assistant";
+  content: string;
   created_at: string;
 }
 

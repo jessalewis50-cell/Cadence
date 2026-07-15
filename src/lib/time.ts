@@ -88,6 +88,12 @@ export function toDateStr(d: Date): string {
   return d.toISOString().split("T")[0];
 }
 
+/** Minutes since midnight for a "HH:MM" string (e.g. "09:30" → 570). */
+export function timeToMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
 export interface TimeOption { value: string; label: string; }
 
 /** Build the 30-minute-interval time picker options for a full day. */

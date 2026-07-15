@@ -18,20 +18,20 @@ export function getMockData() {
   const today = toDateStr(new Date());
 
   const blocks: ScheduleBlock[] = [
-    { id: "b1", user_id: "guest", day: today, start_time: "09:00", end_time: "09:25", title: "Deep work — Build Better",       category: "deep",  position: 0, done: false, created_at: new Date().toISOString() },
+    { id: "b1", user_id: "guest", day: today, start_time: "09:00", end_time: "09:25", title: "Deep work — Build Better",       category: "deep",  activity: "deep work", position: 0, done: false, created_at: new Date().toISOString() },
     { id: "b2", user_id: "guest", day: today, start_time: "09:25", end_time: "09:30", title: "Short break",                    category: "break", position: 1, done: false, created_at: new Date().toISOString() },
-    { id: "b3", user_id: "guest", day: today, start_time: "09:30", end_time: "10:15", title: "Cadence — auth + layout",        category: "deep",  position: 2, done: false, created_at: new Date().toISOString() },
-    { id: "b4", user_id: "guest", day: today, start_time: "10:30", end_time: "11:00", title: "Strength + stretch",             category: "body",  position: 3, done: false, created_at: new Date().toISOString() },
-    { id: "b5", user_id: "guest", day: today, start_time: "11:15", end_time: "12:00", title: "Zoning-agent research",          category: "deep",  position: 4, done: false, created_at: new Date().toISOString() },
-    { id: "b6", user_id: "guest", day: today, start_time: "13:00", end_time: "13:30", title: "Inbox + portfolio updates",      category: "admin", position: 5, done: false, created_at: new Date().toISOString() },
+    { id: "b3", user_id: "guest", day: today, start_time: "09:30", end_time: "10:15", title: "Cadence — auth + layout",        category: "deep",  activity: "deep work", position: 2, done: false, created_at: new Date().toISOString() },
+    { id: "b4", user_id: "guest", day: today, start_time: "10:30", end_time: "11:00", title: "Strength + stretch",             category: "body",  activity: "exercise",  position: 3, done: false, created_at: new Date().toISOString() },
+    { id: "b5", user_id: "guest", day: today, start_time: "11:15", end_time: "12:00", title: "Zoning-agent research",          category: "deep",  activity: "deep work", position: 4, done: false, created_at: new Date().toISOString() },
+    { id: "b6", user_id: "guest", day: today, start_time: "13:00", end_time: "13:30", title: "Inbox + portfolio updates",      category: "admin", activity: "admin",     position: 5, done: false, created_at: new Date().toISOString() },
   ];
 
   const habits: Habit[] = [
-    { id: "h1", user_id: "guest", name: "Morning movement",      position: 0, archived: false, created_at: new Date().toISOString() },
-    { id: "h2", user_id: "guest", name: "Deep work block",       position: 1, archived: false, created_at: new Date().toISOString() },
-    { id: "h3", user_id: "guest", name: "Read 15 min",           position: 2, archived: false, created_at: new Date().toISOString() },
-    { id: "h4", user_id: "guest", name: "No phone before noon",  position: 3, archived: false, created_at: new Date().toISOString() },
-    { id: "h5", user_id: "guest", name: "Plan tomorrow",         position: 4, archived: false, created_at: new Date().toISOString() },
+    { id: "h1", user_id: "guest", name: "Exercise",   position: 0, archived: false, created_at: new Date().toISOString() },
+    { id: "h2", user_id: "guest", name: "Deep work",  position: 1, archived: false, created_at: new Date().toISOString() },
+    { id: "h3", user_id: "guest", name: "Reading",    position: 2, archived: false, created_at: new Date().toISOString() },
+    { id: "h4", user_id: "guest", name: "Planning",   position: 3, archived: false, created_at: new Date().toISOString() },
+    { id: "h5", user_id: "guest", name: "Admin",      position: 4, archived: false, created_at: new Date().toISOString() },
   ];
 
   // Seed past logs to produce realistic streaks: h1→6, h2→11, h3→3, h4→2, h5→8

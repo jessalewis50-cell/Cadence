@@ -45,8 +45,11 @@ export default function HabitsView({ initialHabits, initialTodayLogs, allLogs, i
   const [habits, setHabits]     = useState<Habit[]>(initialHabits);
   const [todayLogs, setTodayLogs] = useState<HabitLog[]>(initialTodayLogs);
   const [newName, setNewName]   = useState("");
+  const [newActivity, setNewActivity] = useState("");
   const [adding, setAdding]     = useState(false);
   const [saving, setSaving]     = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
   const supabase = createClient();
   const todayStr = new Date().toISOString().split("T")[0];
 
@@ -87,15 +90,24 @@ export default function HabitsView({ initialHabits, initialTodayLogs, allLogs, i
     setSaving(true);
     const maxPos = habits.reduce((m, h) => Math.max(m, h.position), -1);
 
+    const activity = newActivity.trim() || null;
+
     if (!isGuest) {
       const { data, error } = await supabase
         .from("habits")
-        .insert({ user_id: userId!, name: newName.trim(), position: maxPos + 1, archived: false })
+        .insert({
+          user_id: userId!,
+          name: newName.trim(),
+          position: maxPos + 1,
+          archived: false,
+          ...(activity ? { activity } : {}),
+        })
         .select().single();
       setSaving(false);
       if (!error && data) {
         setHabits((prev) => [...prev, data as Habit]);
         setNewName("");
+        setNewActivity("");
         setAdding(false);
         return;
       }
@@ -103,13 +115,23 @@ export default function HabitsView({ initialHabits, initialTodayLogs, allLogs, i
     // Guest path
     const local: Habit = {
       id: crypto.randomUUID(), user_id: "guest",
-      name: newName.trim(), position: maxPos + 1,
+      name: newName.trim(), activity, position: maxPos + 1,
       archived: false, created_at: new Date().toISOString(),
     };
     setHabits((prev) => [...prev, local]);
     setNewName("");
+    setNewActivity("");
     setAdding(false);
     setSaving(false);
+  }
+
+  async function saveActivity(habit: Habit) {
+    const value = editValue.trim() || null;
+    setEditingId(null);
+    setHabits((prev) => prev.map((h) => (h.id === habit.id ? { ...h, activity: value } : h)));
+    if (!isGuest) {
+      await supabase.from("habits").update({ activity: value }).eq("id", habit.id);
+    }
   }
 
   async function archiveHabit(id: string) {
@@ -160,7 +182,7 @@ export default function HabitsView({ initialHabits, initialTodayLogs, allLogs, i
         </div>
 
         {adding && (
-          <form onSubmit={addHabit} className="flex gap-2 mb-4">
+          <form onSubmit={addHabit} className="flex gap-2 mb-4 flex-wrap">
             <input
               type="text"
               autoFocus
@@ -168,7 +190,14 @@ export default function HabitsView({ initialHabits, initialTodayLogs, allLogs, i
               placeholder="Habit name…"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              className="flex-1 bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm placeholder:text-faint outline-none focus:border-violet transition-colors"
+              className="flex-1 min-w-[140px] bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm placeholder:text-faint outline-none focus:border-violet transition-colors"
+            />
+            <input
+              type="text"
+              placeholder="Activity to match (optional)…"
+              value={newActivity}
+              onChange={(e) => setNewActivity(e.target.value)}
+              className="flex-1 min-w-[140px] bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm placeholder:text-faint outline-none focus:border-violet transition-colors"
             />
             <button
               type="button"
@@ -236,6 +265,33 @@ export default function HabitsView({ initialHabits, initialTodayLogs, allLogs, i
                       <path d="M18 6 6 18M6 6l12 12"/>
                     </svg>
                   </button>
+                </div>
+
+                {/* Activity this habit is matched by on the schedule */}
+                <div className="ml-8 flex items-center gap-2">
+                  <span className="text-[11px] text-faint">Matches activity:</span>
+                  {editingId === habit.id ? (
+                    <input
+                      autoFocus
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onBlur={() => saveActivity(habit)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); saveActivity(habit); }
+                        if (e.key === "Escape") setEditingId(null);
+                      }}
+                      placeholder="e.g. reading"
+                      className="w-40 bg-ink border border-line rounded px-2 py-0.5 text-[11.5px] text-txt outline-none focus:border-violet transition-colors"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => { setEditingId(habit.id); setEditValue(habit.activity ?? ""); }}
+                      title="Set the schedule activity this habit is completed by"
+                      className="text-[11.5px] text-violet/90 hover:text-violet transition-colors"
+                    >
+                      {habit.activity ? habit.activity : `${habit.name} (from name)`}
+                    </button>
+                  )}
                 </div>
 
                 {/* 14-day mini heatmap */}

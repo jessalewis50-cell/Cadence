@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase-browser";
 import { to12h, addMinutes, toDateStr } from "@/lib/time";
+import { scheduleTemplateBlocks, matchingDatesForTemplate } from "@/lib/scheduleTemplate";
 import { CAT_COLORS, CAT_LABELS } from "@/lib/constants";
 import TimeField from "@/components/ui/TimeField";
 import type { BlockTemplate, ScheduleBlock, Category } from "@/lib/types";
@@ -164,8 +165,42 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
   }
 
   async function deleteTemplate(id: string) {
+    const tpl = templates.find(t => t.id === id);
+    if (!tpl) return;
+
+    const repeating = tpl.recurrence_days.length > 0;
+    const message = repeating
+      ? `Delete '${tpl.title}'? This will also remove it from your calendar on all upcoming days (today onward). Past days will be kept. This can't be undone.`
+      : `Delete '${tpl.title}'? This can't be undone.`;
+    if (!window.confirm(message)) return;
+
+    // Remove the template itself.
     setTemplates(prev => prev.filter(t => t.id !== id));
-    if (!isGuest) await supabase.from("block_templates").delete().eq("id", id);
+
+    // Remove this template's upcoming calendar copies from local state so the
+    // week view updates immediately. Matched by template_id on today-or-later
+    // days; past days and other templates' blocks stay.
+    setDayBlocks(prev => {
+      const next: Record<string, ScheduleBlock[]> = {};
+      for (const [day, blocks] of Object.entries(prev)) {
+        next[day] = day >= todayStr
+          ? blocks.filter(b => b.template_id !== id)
+          : blocks;
+      }
+      return next;
+    });
+
+    if (!isGuest) {
+      await supabase.from("block_templates").delete().eq("id", id);
+      // Delete only this template's upcoming copies (matched by template_id) —
+      // never past history, never other sources.
+      await supabase
+        .from("schedule_blocks")
+        .delete()
+        .eq("user_id", userId!)
+        .eq("template_id", id)
+        .gte("day", todayStr);
+    }
   }
 
   function startEditTpl(tpl: BlockTemplate) {
@@ -184,6 +219,28 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
   async function updateTemplate(e: React.FormEvent) {
     e.preventDefault();
     if (!editingTplId) return;
+
+    const original = templates.find(t => t.id === editingTplId);
+    if (!original) return;
+
+    const updatedTpl: BlockTemplate = {
+      ...original,
+      ...editTplDraft,
+      default_start_time: editTplDraft.default_start_time || null,
+      detail: editTplDraft.detail.trim() || null,
+    };
+
+    // A recurring edit propagates to the calendar; confirm before rewriting
+    // upcoming days. Also covers making a template recurring / non-recurring.
+    const affectsCalendar =
+      original.recurrence_days.length > 0 || updatedTpl.recurrence_days.length > 0;
+    if (
+      affectsCalendar &&
+      !window.confirm(`Update '${updatedTpl.title}' on all upcoming days? Past days stay unchanged.`)
+    ) {
+      return;
+    }
+
     setEditTplSaving(true);
     setEditTplError(null);
 
@@ -207,16 +264,35 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
       }
     }
 
-    const updatedTpl: BlockTemplate = {
-      ...templates.find(t => t.id === editingTplId)!,
-      ...editTplDraft,
-      default_start_time: editTplDraft.default_start_time || null,
-      detail: editTplDraft.detail.trim() || null,
-    };
     setTemplates(prev => prev.map(t => t.id === editingTplId ? updatedTpl : t));
     setEditingTplId(null);
     setEditTplSaving(false);
-    autoScheduleTemplate(updatedTpl);
+
+    // Rebuild this template's UPCOMING copies so today-onward matches the new
+    // time, duration, and days. Past copies are preserved.
+    if (affectsCalendar) {
+      if (!isGuest) {
+        await supabase
+          .from("schedule_blocks")
+          .delete()
+          .eq("user_id", userId!)
+          .eq("template_id", updatedTpl.id)
+          .gte("day", todayStr);
+      }
+      // Clear upcoming copies from local state first, then regenerate — the
+      // shared scheduler skips days that already have a copy, so clearing is
+      // what lets the new time/days take effect.
+      setDayBlocks(prev => {
+        const next: Record<string, ScheduleBlock[]> = {};
+        for (const [day, blocks] of Object.entries(prev)) {
+          next[day] = day >= todayStr
+            ? blocks.filter(b => b.template_id !== updatedTpl.id)
+            : blocks;
+        }
+        return next;
+      });
+      await autoScheduleTemplate(updatedTpl);
+    }
   }
 
   // ── Add template to a day ─────────────────────────────────────────────────
@@ -236,6 +312,8 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
       category: template.category,
       position: maxPos + 1,
       done: false,
+      source: "template" as const,
+      template_id: template.id,
     };
 
     if (!isGuest) {
@@ -294,88 +372,52 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
   async function autoScheduleTemplate(tpl: BlockTemplate) {
     if (tpl.recurrence_days.length === 0 || !tpl.default_start_time) return;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const endDate = new Date(today);
-    endDate.setDate(today.getDate() + 27); // 4 weeks
-
-    const matchingDates: Date[] = [];
-    const cursor = new Date(today);
-    while (cursor <= endDate) {
-      if (tpl.recurrence_days.includes(cursor.getDay())) matchingDates.push(new Date(cursor));
-      cursor.setDate(cursor.getDate() + 1);
-    }
-    if (matchingDates.length === 0) return;
-
-    const dateStrs = matchingDates.map(d => toDateStr(d));
-
     if (!isGuest) {
-      // Find days that already have a block with this title so we don't duplicate
-      const { data: existing } = await supabase
-        .from("schedule_blocks")
-        .select("day")
-        .eq("user_id", userId!)
-        .eq("title", tpl.title)
-        .in("day", dateStrs);
+      // Shared logic: creates the recurring blocks (with dedupe + source:"template").
+      const created = await scheduleTemplateBlocks(supabase, tpl, userId!);
+      if (created.length === 0) return;
 
-      const existingDays = new Set((existing ?? []).map((b: { day: string }) => b.day));
-      const toCreate = matchingDates.filter(d => !existingDays.has(toDateStr(d)));
-      if (toCreate.length === 0) return;
-
-      const payload = toCreate.map(d => ({
-        user_id: userId!,
-        day: toDateStr(d),
-        start_time: tpl.default_start_time!,
-        end_time: addMinutes(tpl.default_start_time!, tpl.duration_minutes),
-        title: tpl.title,
-        category: tpl.category,
-        detail: tpl.detail ?? null,
-        position: 0,
-        done: false,
-        source: "template" as const,
-      }));
-
-      const { data: created } = await supabase
-        .from("schedule_blocks").insert(payload).select();
-
-      if (created && created.length > 0) {
-        const currentWeekStrs = new Set(getWeekDays(weekOffset).map(d => toDateStr(d)));
-        const inView = (created as ScheduleBlock[]).filter(b => currentWeekStrs.has(b.day));
-        if (inView.length > 0) {
-          setDayBlocks(prev => {
-            const next = { ...prev };
-            for (const b of inView) {
-              next[b.day] = [...(next[b.day] ?? []), b].sort((a, c) => a.start_time.localeCompare(c.start_time));
-            }
-            return next;
-          });
-        }
-      }
-    } else {
-      // Guest: only update currently visible week
       const currentWeekStrs = new Set(getWeekDays(weekOffset).map(d => toDateStr(d)));
-      const toCreate = matchingDates.filter(d => {
-        const ds = toDateStr(d);
-        return currentWeekStrs.has(ds) && !(dayBlocks[ds] ?? []).some(b => b.title === tpl.title);
-      });
-      if (toCreate.length === 0) return;
-      const created: ScheduleBlock[] = toCreate.map(d => ({
-        id: crypto.randomUUID(), user_id: "guest",
-        day: toDateStr(d),
-        start_time: tpl.default_start_time!,
-        end_time: addMinutes(tpl.default_start_time!, tpl.duration_minutes),
-        title: tpl.title, category: tpl.category,
-        detail: tpl.detail ?? null, position: 0, done: false,
-        source: "template" as const, created_at: new Date().toISOString(),
-      }));
-      setDayBlocks(prev => {
-        const next = { ...prev };
-        for (const b of created) {
-          next[b.day] = [...(next[b.day] ?? []), b].sort((a, c) => a.start_time.localeCompare(c.start_time));
-        }
-        return next;
-      });
+      const inView = created.filter(b => currentWeekStrs.has(b.day));
+      if (inView.length > 0) {
+        setDayBlocks(prev => {
+          const next = { ...prev };
+          for (const b of inView) {
+            next[b.day] = [...(next[b.day] ?? []), b].sort((a, c) => a.start_time.localeCompare(c.start_time));
+          }
+          return next;
+        });
+      }
+      return;
     }
+
+    // Guest: no DB — only reflect the currently visible week in local state.
+    // Functional update so dedupe reads the freshest state (matters when this
+    // runs right after an update clears the old copies).
+    const currentWeekStrs = new Set(getWeekDays(weekOffset).map(d => toDateStr(d)));
+    setDayBlocks(prev => {
+      const next = { ...prev };
+      const dates = matchingDatesForTemplate(tpl.recurrence_days).filter(d => {
+        const ds = toDateStr(d);
+        return currentWeekStrs.has(ds) && !(next[ds] ?? []).some(b => b.title === tpl.title);
+      });
+      for (const d of dates) {
+        const ds = toDateStr(d);
+        const block: ScheduleBlock = {
+          id: crypto.randomUUID(), user_id: "guest",
+          day: ds,
+          start_time: tpl.default_start_time!,
+          end_time: addMinutes(tpl.default_start_time!, tpl.duration_minutes),
+          title: tpl.title, category: tpl.category,
+          activity: tpl.activity ?? null,
+          detail: tpl.detail ?? null, position: 0, done: false,
+          source: "template" as const, template_id: tpl.id,
+          created_at: new Date().toISOString(),
+        };
+        next[ds] = [...(next[ds] ?? []), block].sort((a, c) => a.start_time.localeCompare(c.start_time));
+      }
+      return next;
+    });
   }
 
   // ── "Schedule this week" — apply recurring templates ─────────────────────
@@ -392,7 +434,7 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
         const startTime = tpl.default_start_time ?? nextStartTime([...existing, ...created.filter(b => b.day === dayStr)]);
         const endTime   = addMinutes(startTime, tpl.duration_minutes);
         const maxPos    = [...existing, ...created.filter(b => b.day === dayStr)].reduce((m, b) => Math.max(m, b.position), -1);
-        const newBlock  = { user_id: userId ?? "guest", day: dayStr, start_time: startTime, end_time: endTime, title: tpl.title, category: tpl.category, position: maxPos + 1, done: false };
+        const newBlock  = { user_id: userId ?? "guest", day: dayStr, start_time: startTime, end_time: endTime, title: tpl.title, category: tpl.category, position: maxPos + 1, done: false, source: "template" as const, template_id: tpl.id };
         if (!isGuest) {
           const { data } = await supabase.from("schedule_blocks").insert(newBlock).select().single();
           if (data) created.push(data as ScheduleBlock);

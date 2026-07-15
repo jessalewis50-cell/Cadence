@@ -7,10 +7,21 @@ import type { ScheduleBlock, TimerMode } from "@/lib/types";
 // r=88 in a 200×200 viewBox
 const CIRC = 2 * Math.PI * 88;
 
+// H:MM:SS once the time reaches an hour; MM:SS while under an hour.
 function fmt(s: number) {
-  const m = Math.floor(s / 60);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
   const x = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}`;
   return `${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}`;
+}
+
+// Whole-minute countdown: "Xh Ym" at/over an hour, "Xm" under an hour.
+function fmtMins(mins: number) {
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 function toMinutes(t: string): number {
@@ -403,7 +414,7 @@ function DayPlanMode({ blocks }: { blocks: ScheduleBlock[] }) {
         />
       ) : isBefore ? (
         <div className="w-full max-w-[200px] mx-auto aspect-square my-1 flex flex-col items-center justify-center gap-1 border-2 border-dashed border-line rounded-full">
-          <span className="font-grotesk font-semibold text-[32px] tabular-nums text-muted leading-none">{minsToStart}m</span>
+          <span className="font-grotesk font-semibold text-[32px] tabular-nums text-muted leading-none">{fmtMins(minsToStart)}</span>
           <span className="text-[11px] text-faint">until start</span>
         </div>
       ) : (

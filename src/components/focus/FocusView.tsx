@@ -17,9 +17,12 @@ function fmtSecs(s: number) {
   return `${m}m`;
 }
 
+// H:MM:SS once the duration reaches an hour; MM:SS while under an hour.
 function fmt(s: number) {
-  const m = Math.floor(s / 60);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
   const x = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}`;
   return `${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}`;
 }
 

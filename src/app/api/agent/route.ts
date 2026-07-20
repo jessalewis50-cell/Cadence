@@ -876,6 +876,7 @@ export async function POST(request: Request) {
         .from("usage_events")
         .insert({
           user_id:            user.id,
+          app:                "cadence",
           model,
           input_tokens:       usage.input_tokens ?? 0,
           output_tokens:      usage.output_tokens ?? 0,

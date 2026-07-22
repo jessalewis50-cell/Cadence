@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase-server";
+import { getEntitlements, upgradeRequiredBody } from "@/lib/entitlements";
 import Anthropic from "@anthropic-ai/sdk";
 import { toDateStr } from "@/lib/time";
 
@@ -64,9 +65,9 @@ export async function POST(request: Request) {
   }
 
   // 2. Feature gate — AI must be enabled for this user
-  const isAiEnabled = user.user_metadata?.is_ai_enabled === true;
-  if (!isAiEnabled) {
-    return Response.json({ error: "AI features not enabled for this account" }, { status: 403 });
+  const entitlements = await getEntitlements(supabase, user.id);
+  if (!entitlements.cadenceAI) {
+    return Response.json(upgradeRequiredBody("cadence_ai"), { status: 403 });
   }
 
   // 3. Parse request body

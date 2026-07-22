@@ -18,6 +18,17 @@ State lives in `public.profiles`; the plan → feature mapping lives in
   Simultaneous `almanac_pro` + `cadence_pro` = two subscription items (or two
   subscriptions) on one customer.
 
+## Metering pieces already in place (2026-07)
+
+- `usage_events.cost_microdollars` — estimated cost per call; pricing lives in
+  `src/lib/aiBudget.ts` (mirrored in `notes-app/api/anthropic.js` +
+  `supabase/functions/nightly-insights`).
+- Allowances: almanac_pro/cadence_pro $3/mo each (summed if both held),
+  cadence_plus $8/mo shared. Enforced by `checkAiAccess` before every
+  Anthropic call; 402 `limit_reached` responses render as friendly copy.
+- `credit_grants` — top-up credits with `expires_at` (period end) and a
+  `stripe_payment_id` column waiting for checkout.
+
 ## New pieces the Stripe phase adds
 
 1. **Stripe products/prices** — one product per plan slug; store the
@@ -34,6 +45,11 @@ State lives in `public.profiles`; the plan → feature mapping lives in
    `upgrade_required` to find every surface.
 5. **cadence_plus bundling rules** — decide upgrade path pricing (e.g. proration
    when combining almanac_pro + cadence_pro into cadence_plus).
+6. **Top-up checkout** — two one-time Stripe payments: $3 → 1,500,000 µ$ credit,
+   $5 → 3,000,000 µ$ credit. The webhook inserts a `credit_grants` row with
+   `stripe_payment_id` and `expires_at = profiles.current_period_end`. The
+   "Get more credits" buttons in both apps' meters currently carry this copy as
+   a tooltip — wire them to the checkout page.
 
 ## Testing hooks that carry over
 

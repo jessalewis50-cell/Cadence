@@ -9,6 +9,67 @@ const anthropicKey   = Deno.env.get("ANTHROPIC_API_KEY")!;
 
 const anthropic = new Anthropic({ apiKey: anthropicKey });
 
+// ── Metering (mirrors src/lib/aiBudget.ts — keep in sync) ────────────────────
+// Haiku 4.5 microdollars/token; allowances per plan; calendar-month fallback.
+const HAIKU_PRICE = { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 };
+const PLAN_ALLOWANCES: Record<string, number> = {
+  almanac_pro: 3_000_000,
+  cadence_pro: 3_000_000,
+  cadence_plus: 8_000_000,
+};
+
+type ProfileRow = {
+  user_id: string;
+  plans: string[];
+  subscription_status: string | null;
+  current_period_end: string | null;
+};
+
+function hasCadenceAI(p: ProfileRow, now: Date): boolean {
+  if (!p.plans.includes("cadence_pro") && !p.plans.includes("cadence_plus")) return false;
+  const s = p.subscription_status;
+  if (s !== null && s !== "active" && s !== "trialing") return false;
+  const end = p.current_period_end
+    ? new Date(p.current_period_end)
+    : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  return end.getTime() > now.getTime();
+}
+
+function billingPeriod(p: ProfileRow, now: Date): { start: Date; end: Date } {
+  if (p.current_period_end) {
+    const end = new Date(p.current_period_end);
+    const start = new Date(end);
+    start.setUTCMonth(start.getUTCMonth() - 1);
+    return { start, end };
+  }
+  return {
+    start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
+    end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)),
+  };
+}
+
+async function hasBudgetLeft(p: ProfileRow, now: Date): Promise<boolean> {
+  const { start, end } = billingPeriod(p, now);
+  const allowance = p.plans.reduce((s, plan) => s + (PLAN_ALLOWANCES[plan] ?? 0), 0);
+  const [usageRes, grantsRes] = await Promise.all([
+    supabaseFetch(
+      `usage_events?user_id=eq.${p.user_id}&created_at=gte.${start.toISOString()}` +
+      `&created_at=lt.${end.toISOString()}&select=cost_microdollars`
+    ),
+    supabaseFetch(
+      `credit_grants?user_id=eq.${p.user_id}&expires_at=gt.${now.toISOString()}` +
+      `&select=amount_microdollars`
+    ),
+  ]);
+  const usage = await usageRes.json();
+  const grants = await grantsRes.json();
+  const used = (Array.isArray(usage) ? usage : []).reduce(
+    (s: number, r: { cost_microdollars: number | null }) => s + (r.cost_microdollars ?? 0), 0);
+  const credits = (Array.isArray(grants) ? grants : []).reduce(
+    (s: number, r: { amount_microdollars: number }) => s + (r.amount_microdollars ?? 0), 0);
+  return used < allowance + credits;
+}
+
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -67,6 +128,35 @@ Today is ${todayStr()}. Write the insight directly, no preamble.`;
     messages:   [{ role: "user", content: prompt }],
   });
 
+  // Best-effort usage + cost logging (mirrors the app routes).
+  try {
+    const u = message.usage;
+    const tokens = {
+      input_tokens:       u.input_tokens ?? 0,
+      output_tokens:      u.output_tokens ?? 0,
+      cache_read_tokens:  u.cache_read_input_tokens ?? 0,
+      cache_write_tokens: u.cache_creation_input_tokens ?? 0,
+    };
+    const cost = Math.ceil(
+      tokens.input_tokens * HAIKU_PRICE.input +
+      tokens.output_tokens * HAIKU_PRICE.output +
+      tokens.cache_read_tokens * HAIKU_PRICE.cacheRead +
+      tokens.cache_write_tokens * HAIKU_PRICE.cacheWrite
+    );
+    await supabaseFetch("usage_events", {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: userId,
+        app: "cadence",
+        model: "claude-haiku-4-5-20251001",
+        ...tokens,
+        cost_microdollars: cost,
+      }),
+    });
+  } catch (e) {
+    console.warn(`[nightly-insights] usage log failed for ${userId}:`, e);
+  }
+
   const content = message.content[0];
   return content.type === "text" ? content.text.trim() : null;
 }
@@ -76,22 +166,24 @@ Deno.serve(async (req) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  // Fetch all paid users (is_ai_enabled = true in raw_user_meta_data)
-  const usersRes = await fetch(
-    `${supabaseUrl}/auth/v1/admin/users?page=1&per_page=1000`,
-    {
-      headers: {
-        "apikey":        serviceRoleKey,
-        "Authorization": `Bearer ${serviceRoleKey}`,
-      },
-    }
+  // Fetch users entitled to Cadence AI (profiles-based plans, not the retired
+  // is_ai_enabled metadata flag), then drop anyone whose budget is spent.
+  const now = new Date();
+  const profilesRes = await supabaseFetch(
+    `profiles?or=(plans.cs.{cadence_pro},plans.cs.{cadence_plus})` +
+    `&select=user_id,plans,subscription_status,current_period_end`
   );
+  const profiles: ProfileRow[] = await profilesRes.json();
 
-  const { users } = await usersRes.json();
-  const paidUsers: Array<{ id: string }> = (users ?? []).filter(
-    (u: { raw_user_meta_data?: { is_ai_enabled?: boolean } }) =>
-      u.raw_user_meta_data?.is_ai_enabled === true
-  );
+  const paidUsers: Array<{ id: string }> = [];
+  for (const p of (Array.isArray(profiles) ? profiles : [])) {
+    if (!hasCadenceAI(p, now)) continue;
+    if (!(await hasBudgetLeft(p, now))) {
+      console.log(`[nightly-insights] Skipped ${p.user_id} — AI budget spent`);
+      continue;
+    }
+    paidUsers.push({ id: p.user_id });
+  }
 
   const userCount = paidUsers.length;
   console.log(`[nightly-insights] ${userCount} paid users`);

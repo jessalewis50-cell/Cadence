@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import UsageMeter from "@/components/usage/UsageMeter";
 
 interface Message {
   id: string;
@@ -183,6 +184,7 @@ export default function AgentChat() {
           Send
         </button>
       </div>
+      <UsageMeter />
     </section>
   );
 }

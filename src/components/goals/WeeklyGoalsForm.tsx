@@ -67,7 +67,9 @@ export default function WeeklyGoalsForm({ existingGoals, weekStart }: Props) {
       setError(
         body.code === "upgrade_required"
           ? "AI scheduling is part of Cadence Pro. Your account is on the free plan — upgrading unlocks it. (Pricing coming soon.)"
-          : body.error ?? "Something went wrong. Try again."
+          : body.code === "limit_reached"
+            ? body.error // server copy is already user-facing
+            : body.error ?? "Something went wrong. Try again."
       );
       return;
     }

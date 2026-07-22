@@ -1,5 +1,6 @@
 import { createClient, createServiceClient } from "@/lib/supabase-server";
 import { getEntitlements, upgradeRequiredBody } from "@/lib/entitlements";
+import { checkAiAccess, estimateCostMicrodollars } from "@/lib/aiBudget";
 import Anthropic from "@anthropic-ai/sdk";
 import { toDateStr } from "@/lib/time";
 import { scheduleTemplateBlocks, rebuildTemplateBlocks, validateSlots, reconcileSlotIds } from "@/lib/scheduleTemplate";
@@ -809,10 +810,19 @@ export async function POST(request: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 2. Feature gate — consistent with the other AI routes.
-  const entitlements = await getEntitlements(supabase, user.id);
-  if (!entitlements.cadenceAI) {
-    return Response.json(upgradeRequiredBody("cadence_ai"), { status: 403 });
+  // 2. Feature gate — entitlement + monthly budget, checked once per user
+  //    message. The tool loop below may make several Anthropic calls, so a
+  //    message that starts under the limit can finish slightly over it; the
+  //    overshoot is bounded by one message's cost and is acceptable.
+  const gateService = process.env.SUPABASE_SERVICE_ROLE_KEY ? createServiceClient() : null;
+  if (gateService) {
+    const access = await checkAiAccess(supabase, gateService, user.id, "cadence_ai");
+    if (!access.ok) return Response.json(access.body, { status: access.status });
+  } else {
+    const entitlements = await getEntitlements(supabase, user.id);
+    if (!entitlements.cadenceAI) {
+      return Response.json(upgradeRequiredBody("cadence_ai"), { status: 403 });
+    }
   }
 
   // 3. Parse the conversation history.
@@ -883,6 +893,12 @@ export async function POST(request: Request) {
           output_tokens:      usage.output_tokens ?? 0,
           cache_read_tokens:  usage.cache_read_input_tokens ?? 0,
           cache_write_tokens: usage.cache_creation_input_tokens ?? 0,
+          cost_microdollars:  estimateCostMicrodollars(model, {
+            input_tokens:       usage.input_tokens ?? 0,
+            output_tokens:      usage.output_tokens ?? 0,
+            cache_read_tokens:  usage.cache_read_input_tokens ?? 0,
+            cache_write_tokens: usage.cache_creation_input_tokens ?? 0,
+          }),
         })
         .then(
           ({ error }) => { if (error) console.warn("usage_events insert failed:", error.message); },

@@ -82,8 +82,10 @@ export default function AgentChat() {
         const errText =
           data?.code === "upgrade_required"
             ? "The AI assistant is part of Cadence Pro. Your account is on the free plan — upgrading unlocks agent chat and AI scheduling. (Pricing coming soon.)"
-            : (data && typeof data.error === "string" && data.error) ||
-              "Something went wrong. Please try again.";
+            : data?.code === "limit_reached"
+              ? data.error // server copy is already user-facing
+              : (data && typeof data.error === "string" && data.error) ||
+                "Something went wrong. Please try again.";
         setMessages((prev) => [
           ...prev,
           { id: crypto.randomUUID(), role: "agent", text: errText },

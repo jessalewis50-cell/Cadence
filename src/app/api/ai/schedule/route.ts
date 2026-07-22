@@ -1,5 +1,6 @@
-import { createClient } from "@/lib/supabase-server";
+import { createClient, createServiceClient } from "@/lib/supabase-server";
 import { getEntitlements, upgradeRequiredBody } from "@/lib/entitlements";
+import { checkAiAccess, estimateCostMicrodollars } from "@/lib/aiBudget";
 import Anthropic from "@anthropic-ai/sdk";
 import { toDateStr } from "@/lib/time";
 
@@ -64,10 +65,16 @@ export async function POST(request: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 2. Feature gate — AI must be enabled for this user
-  const entitlements = await getEntitlements(supabase, user.id);
-  if (!entitlements.cadenceAI) {
-    return Response.json(upgradeRequiredBody("cadence_ai"), { status: 403 });
+  // 2. Feature gate — entitlement + monthly budget, before any Claude call
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY ? createServiceClient() : null;
+  if (service) {
+    const access = await checkAiAccess(supabase, service, user.id, "cadence_ai");
+    if (!access.ok) return Response.json(access.body, { status: access.status });
+  } else {
+    const entitlements = await getEntitlements(supabase, user.id);
+    if (!entitlements.cadenceAI) {
+      return Response.json(upgradeRequiredBody("cadence_ai"), { status: 403 });
+    }
   }
 
   // 3. Parse request body
@@ -127,6 +134,30 @@ export async function POST(request: Request) {
       max_tokens: 4096,
       messages:   [{ role: "user", content: prompt }],
     });
+    // Best-effort usage logging — must never fail the user's request.
+    if (service) {
+      const tokens = {
+        input_tokens:       message.usage.input_tokens ?? 0,
+        output_tokens:      message.usage.output_tokens ?? 0,
+        cache_read_tokens:  message.usage.cache_read_input_tokens ?? 0,
+        cache_write_tokens: message.usage.cache_creation_input_tokens ?? 0,
+      };
+      // Awaited: a detached promise can be dropped when the serverless
+      // function freezes after responding.
+      await service
+        .from("usage_events")
+        .insert({
+          user_id: user.id,
+          app: "cadence",
+          model: "claude-sonnet-4-6",
+          ...tokens,
+          cost_microdollars: estimateCostMicrodollars("claude-sonnet-4-6", tokens),
+        })
+        .then(
+          ({ error }) => { if (error) console.warn("usage_events insert failed:", error.message); },
+          (e) => { console.warn("usage_events insert threw:", e); }
+        );
+    }
     const content = message.content[0];
     if (content.type !== "text") throw new Error("Unexpected response type");
     responseText = content.text.trim();

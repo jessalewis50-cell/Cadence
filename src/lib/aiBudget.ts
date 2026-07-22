@@ -10,6 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   deriveEntitlements,
   upgradeRequiredBody,
+  type Entitlements,
   type ProfileRow,
 } from "./entitlements";
 
@@ -149,7 +150,7 @@ export function limitReachedBody(feature: "cadence_ai" | "almanac_ai", meter: Me
 }
 
 export type AiAccess =
-  | { ok: true; meter: Meter }
+  | { ok: true; meter: Meter; entitlements: Entitlements }
   | { ok: false; status: 403 | 402; body: Record<string, unknown> };
 
 // The one gate every AI endpoint calls before contacting Anthropic:
@@ -177,5 +178,5 @@ export async function checkAiAccess(
   if (meter.used_microdollars >= meter.budget_microdollars) {
     return { ok: false, status: 402, body: limitReachedBody(feature, meter) };
   }
-  return { ok: true, meter };
+  return { ok: true, meter, entitlements: ents };
 }

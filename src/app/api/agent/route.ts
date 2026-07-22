@@ -1,6 +1,12 @@
 import { createClient, createServiceClient } from "@/lib/supabase-server";
-import { getEntitlements, upgradeRequiredBody } from "@/lib/entitlements";
+import { getEntitlements, upgradeRequiredBody, type Entitlements } from "@/lib/entitlements";
 import { checkAiAccess, estimateCostMicrodollars } from "@/lib/aiBudget";
+import {
+  notesToolsFor,
+  executeNotesTool,
+  NOTES_PROMPT_SECTION,
+  NO_NOTES_PROMPT_LINE,
+} from "@/lib/agentNotes";
 import Anthropic from "@anthropic-ai/sdk";
 import { toDateStr } from "@/lib/time";
 import { scheduleTemplateBlocks, rebuildTemplateBlocks, validateSlots, reconcileSlotIds } from "@/lib/scheduleTemplate";
@@ -271,7 +277,8 @@ function buildSystemPrompt(
   goals: unknown[],
   templates: unknown[],
   weekStart: string,
-  weekEnd: string
+  weekEnd: string,
+  notesEnabled: boolean
 ): string {
   return `You are Cadence, a personal productivity assistant embedded in the user's daily planner. \
 You help the user plan and adjust their day by reasoning about their existing schedule, goals, and saved blocks, \
@@ -321,7 +328,8 @@ GUIDELINES:
 - Prefer editing an existing block (update_block) over deleting and recreating when the user is adjusting one.
 - Reference existing blocks by their id (shown in THIS WEEK'S SCHEDULE above) when moving, resizing, retitling, or deleting them.
 - Deep work blocks are typically 90 min; body/movement 45–60; admin 30–60; breaks 15–30. Avoid overlaps.
-- After making changes, reply with a single short, natural sentence summarizing what you did (e.g. "Done — added your weekday morning routine."). Do not list the individual changes; the updated schedule is the confirmation.`;
+- After making changes, reply with a single short, natural sentence summarizing what you did (e.g. "Done — added your weekday morning routine."). Do not list the individual changes; the updated schedule is the confirmation.
+${notesEnabled ? NOTES_PROMPT_SECTION : NO_NOTES_PROMPT_LINE}`;
 }
 
 // ---- Tool execution ------------------------------------------------------
@@ -339,6 +347,10 @@ async function executeTool(
   userId: string,
   weekStart: string
 ): Promise<ExecResult> {
+  // Almanac notes tools (only offered to plus users; RLS scopes to the caller).
+  const notesResult = await executeNotesTool(name, rawInput, supabase, userId);
+  if (notesResult) return notesResult;
+
   const input = (rawInput ?? {}) as Record<string, unknown>;
 
   switch (name) {
@@ -815,15 +827,21 @@ export async function POST(request: Request) {
   //    message that starts under the limit can finish slightly over it; the
   //    overshoot is bounded by one message's cost and is acceptable.
   const gateService = process.env.SUPABASE_SERVICE_ROLE_KEY ? createServiceClient() : null;
+  let entitlements: Entitlements;
   if (gateService) {
     const access = await checkAiAccess(supabase, gateService, user.id, "cadence_ai");
     if (!access.ok) return Response.json(access.body, { status: access.status });
+    entitlements = access.entitlements;
   } else {
-    const entitlements = await getEntitlements(supabase, user.id);
+    entitlements = await getEntitlements(supabase, user.id);
     if (!entitlements.cadenceAI) {
       return Response.json(upgradeRequiredBody("cadence_ai"), { status: 403 });
     }
   }
+
+  // Almanac notes tools ride along only on cadence_plus.
+  const requestTools = [...tools, ...notesToolsFor(entitlements)];
+  const notesEnabled = entitlements.almanacIntegration;
 
   // 3. Parse the conversation history.
   const body = await request.json().catch(() => null);
@@ -873,7 +891,8 @@ export async function POST(request: Request) {
     goalsRes.data ?? [],
     templatesRes.data ?? [],
     weekStart,
-    weekEnd
+    weekEnd,
+    notesEnabled
   );
 
   // Best-effort per-call usage logging via the service role (bypasses RLS).
@@ -920,7 +939,7 @@ export async function POST(request: Request) {
         // one turn without truncation (non-streaming, so kept well under limits).
         max_tokens: 8192,
         system:     systemPrompt,
-        tools,
+        tools:      requestTools,
         messages:   conversation,
       });
 

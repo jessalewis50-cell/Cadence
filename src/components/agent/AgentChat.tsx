@@ -8,6 +8,7 @@ interface Message {
   id: string;
   role: "user" | "agent";
   text: string;
+  noteActions?: string[]; // 📝-prefixed lines from the agent's changes
 }
 
 // Render the agent's Markdown to match the chat card: app fonts, text-txt/muted
@@ -92,12 +93,16 @@ export default function AgentChat() {
           { id: crypto.randomUUID(), role: "agent", text: errText },
         ]);
       } else {
+        const noteActions = Array.isArray(data.changes)
+          ? (data.changes as string[]).filter((c) => c.startsWith("📝"))
+          : [];
         setMessages((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
             role: "agent",
             text: data.reply ?? "Done.",
+            ...(noteActions.length > 0 ? { noteActions } : {}),
           },
         ]);
       }
@@ -143,17 +148,24 @@ export default function AgentChat() {
             key={msg.id}
             className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
-            <div
-              className={[
-                "max-w-[85%] rounded-[12px] px-3 py-2 text-[13.5px] leading-relaxed",
-                msg.role === "user" ? "bg-violet/20 text-txt" : "bg-ink text-txt",
-              ].join(" ")}
-            >
-              {msg.role === "user" ? (
-                msg.text
-              ) : (
-                <ReactMarkdown components={markdownComponents}>{msg.text}</ReactMarkdown>
-              )}
+            <div className="max-w-[85%] flex flex-col gap-1">
+              <div
+                className={[
+                  "rounded-[12px] px-3 py-2 text-[13.5px] leading-relaxed",
+                  msg.role === "user" ? "bg-violet/20 text-txt" : "bg-ink text-txt",
+                ].join(" ")}
+              >
+                {msg.role === "user" ? (
+                  msg.text
+                ) : (
+                  <ReactMarkdown components={markdownComponents}>{msg.text}</ReactMarkdown>
+                )}
+              </div>
+              {msg.noteActions?.map((action, i) => (
+                <div key={i} className="text-faint text-[12px] px-1">
+                  {action}
+                </div>
+              ))}
             </div>
           </div>
         ))}

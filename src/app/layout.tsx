@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, Inter } from "next/font/google";
 import ServiceWorkerRegistrar from "@/components/layout/ServiceWorkerRegistrar";
+import ChatProvider from "@/components/agent/ChatProvider";
+import FloatingChat from "@/components/agent/FloatingChat";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -35,7 +37,11 @@ export default function RootLayout({
     <html lang="en" className={`${spaceGrotesk.variable} ${inter.variable} h-full`}>
       <body className="min-h-full">
         <ServiceWorkerRegistrar />
-        {children}
+        {/* Chat state must live above the pages so it survives navigation. */}
+        <ChatProvider>
+          {children}
+          <FloatingChat />
+        </ChatProvider>
       </body>
     </html>
   );

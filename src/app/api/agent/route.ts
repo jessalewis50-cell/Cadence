@@ -205,6 +205,53 @@ const tools: Anthropic.Tool[] = [
     },
   },
   {
+    name: "create_saved_blocks",
+    description:
+      "Save SEVERAL block templates (saved blocks) in ONE call — use this when a routine has more " +
+      "than one distinct activity. One template per DISTINCT activity: all of an activity's daily " +
+      "occurrences belong in that ONE template's `slots` (e.g. work 8:30-12:00 and 13:00-16:00 = " +
+      "one template with two slots — never two templates for the same activity). Recurring " +
+      "templates are automatically placed on the calendar exactly like create_saved_block.",
+    input_schema: {
+      type: "object",
+      properties: {
+        templates: {
+          type: "array",
+          description: "One entry per distinct activity in the routine.",
+          items: {
+            type: "object",
+            properties: {
+              title:            { type: "string" },
+              category:         { type: "string", enum: ["deep", "body", "break", "admin"] },
+              duration_minutes: { type: "integer", description: "Default length in minutes (used when a slot omits its own)" },
+              slots: {
+                type: "array",
+                description: "ALL occurrences of this activity per recurrence day.",
+                items: {
+                  type: "object",
+                  properties: {
+                    start_time:       { type: "string", description: "HH:MM (24h)" },
+                    duration_minutes: { type: "integer", description: "Length of this occurrence in minutes" },
+                  },
+                  required: ["start_time"],
+                },
+              },
+              recurrence_days: {
+                type: "array",
+                items: { type: "integer", minimum: 0, maximum: 6 },
+                description: "Days it recurs, 0=Sun … 6=Sat",
+              },
+              activity: { type: "string", description: "Short activity label" },
+              detail:   { type: "string" },
+            },
+            required: ["title", "category", "duration_minutes"],
+          },
+        },
+      },
+      required: ["templates"],
+    },
+  },
+  {
     name: "update_saved_block",
     description:
       "Update a saved block (routine template) by id — a PERMANENT routine change. Only include the " +
@@ -338,6 +385,46 @@ interface ExecResult {
   content: string;   // fed back to the model
   isError?: boolean;
   change?: string;   // human-readable summary for the client
+}
+
+// Parse + validate one saved-block input (shared by create_saved_block and
+// the batched create_saved_blocks). Returns an insertable row or an error.
+function parseSavedBlockInput(
+  input: Record<string, unknown>,
+  userId: string
+): { row: Record<string, unknown> } | { error: string } {
+  const title = String(input.title ?? "");
+  const category = String(input.category ?? "");
+  if (!CATEGORIES.has(category)) {
+    return { error: `Invalid category "${category}"${title ? ` on "${title}"` : ""}.` };
+  }
+  const recurrence = Array.isArray(input.recurrence_days)
+    ? (input.recurrence_days as unknown[]).map(Number).filter((n) => n >= 0 && n <= 6)
+    : [];
+
+  const defaultDuration = Number(input.duration_minutes ?? 60);
+  const rawSlots = Array.isArray(input.slots) ? (input.slots as Record<string, unknown>[]) : [];
+  const slots: TemplateSlot[] = rawSlots.map((s) => ({
+    id:               crypto.randomUUID(),
+    start_time:       String(s.start_time ?? ""),
+    duration_minutes: Number(s.duration_minutes ?? defaultDuration),
+  }));
+  const slotErr = validateSlots(slots);
+  if (slotErr) return { error: title ? `"${title}": ${slotErr}` : slotErr };
+
+  return {
+    row: {
+      user_id:          userId,
+      title,
+      category,
+      duration_minutes: defaultDuration,
+      slots,
+      recurrence_days:  recurrence,
+      activity:         input.activity ? String(input.activity) : null,
+      detail:           input.detail ? String(input.detail) : null,
+      position:         0,
+    },
+  };
 }
 
 async function executeTool(
@@ -586,37 +673,12 @@ async function executeTool(
     }
 
     case "create_saved_block": {
-      const category = String(input.category ?? "");
-      if (!CATEGORIES.has(category)) {
-        return { content: `Invalid category "${category}".`, isError: true };
-      }
-      const recurrence = Array.isArray(input.recurrence_days)
-        ? (input.recurrence_days as unknown[]).map(Number).filter((n) => n >= 0 && n <= 6)
-        : [];
-
-      const defaultDuration = Number(input.duration_minutes ?? 60);
-      const rawSlots = Array.isArray(input.slots) ? (input.slots as Record<string, unknown>[]) : [];
-      const slots: TemplateSlot[] = rawSlots.map((s) => ({
-        id:               crypto.randomUUID(),
-        start_time:       String(s.start_time ?? ""),
-        duration_minutes: Number(s.duration_minutes ?? defaultDuration),
-      }));
-      const slotErr = validateSlots(slots);
-      if (slotErr) return { content: slotErr, isError: true };
+      const parsed = parseSavedBlockInput(input, userId);
+      if ("error" in parsed) return { content: parsed.error, isError: true };
 
       const { data, error } = await supabase
         .from("block_templates")
-        .insert({
-          user_id:          userId,
-          title:            String(input.title ?? ""),
-          category,
-          duration_minutes: defaultDuration,
-          slots,
-          recurrence_days:  recurrence,
-          activity:         input.activity ? String(input.activity) : null,
-          detail:           input.detail ? String(input.detail) : null,
-          position:         0,
-        })
+        .insert(parsed.row)
         .select()
         .single();
 
@@ -640,6 +702,50 @@ async function executeTool(
       return {
         content: `Saved block template ${template.id}; scheduled ${scheduled} recurring block(s).`,
         change,
+      };
+    }
+
+    case "create_saved_blocks": {
+      const rawTemplates = Array.isArray(input.templates)
+        ? (input.templates as Record<string, unknown>[])
+        : [];
+      if (rawTemplates.length === 0) {
+        return { content: "templates must be a non-empty array.", isError: true };
+      }
+
+      // Validate everything up front so a bad entry fails the whole call
+      // before any rows are written.
+      const rows: Record<string, unknown>[] = [];
+      for (const t of rawTemplates) {
+        const parsed = parseSavedBlockInput(t, userId);
+        if ("error" in parsed) return { content: parsed.error, isError: true };
+        rows.push(parsed.row);
+      }
+
+      // One insert for all templates, then stamp each through the same shared
+      // recurrence logic the Blocks UI uses (template_id/slot_id identity).
+      const { data, error } = await supabase
+        .from("block_templates")
+        .insert(rows)
+        .select();
+      if (error) return { content: `Failed to save blocks: ${error.message}`, isError: true };
+
+      const templates = (data ?? []) as BlockTemplate[];
+      let scheduled = 0;
+      for (const template of templates) {
+        try {
+          scheduled += (await scheduleTemplateBlocks(supabase, template, userId)).length;
+        } catch (e) {
+          console.warn("scheduleTemplateBlocks failed:", e);
+        }
+      }
+
+      const titles = templates.map((t) => `"${t.title}"`).join(", ");
+      return {
+        content:
+          `Saved ${templates.length} block template(s): ${titles}; ` +
+          `scheduled ${scheduled} recurring block(s).`,
+        change: `Saved ${templates.length} routine${templates.length === 1 ? "" : "s"} and scheduled ${scheduled} block${scheduled === 1 ? "" : "s"}`,
       };
     }
 

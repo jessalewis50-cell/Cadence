@@ -64,7 +64,7 @@ export default function FloatingChat() {
     <>
       {open && (
         <section
-          className="fixed bottom-24 right-6 z-50 w-[380px] max-w-[calc(100vw-3rem)] bg-panel border border-line rounded-[18px] p-5 flex flex-col shadow-2xl shadow-black/40"
+          className="fixed bottom-24 right-6 z-50 w-[560px] max-w-[calc(100vw-3rem)] bg-panel border border-line rounded-[18px] p-5 flex flex-col shadow-2xl shadow-black/40"
           aria-label="Cadence assistant"
         >
           <div className="flex items-start justify-between mb-4">
@@ -85,7 +85,7 @@ export default function FloatingChat() {
 
           <div
             ref={scrollRef}
-            className="flex flex-col gap-2.5 overflow-y-auto max-h-[min(420px,55vh)] pr-1 mb-3"
+            className="flex flex-col gap-2.5 overflow-y-auto max-h-[min(600px,65vh)] pr-1 mb-3"
           >
             {messages.map((msg) => (
               <div

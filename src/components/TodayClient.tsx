@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import Timeline from "@/components/schedule/Timeline";
 import PomodoroTimer from "@/components/focus/PomodoroTimer";
-import WeeklyBars from "@/components/progress/WeeklyBars";
 import TodayActivity from "@/components/activity/TodayActivity";
 import WeekView from "@/components/week/WeekView";
 import MonthView from "@/components/month/MonthView";
@@ -21,51 +20,6 @@ interface Props {
   period: string;
   todayInsight: DailyInsight | null;
   hasDebrief: boolean;
-}
-
-function computeBars(
-  habits: Habit[],
-  allLogs: HabitLog[],
-  focusSessions: FocusSession[]
-): { label: string; pct: number }[] {
-  const weekStart = new Date();
-  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-  weekStart.setHours(0, 0, 0, 0);
-  const weekStartStr = toDateStr(weekStart);
-
-  const weekLogs = allLogs.filter((l) => l.day >= weekStartStr && l.completed);
-  const dayOfWeek = new Date().getDay();
-  const daysElapsed = Math.max(1, dayOfWeek + 1);
-  const habitsPct =
-    habits.length > 0
-      ? Math.min(100, Math.round((weekLogs.length / (habits.length * daysElapsed)) * 100))
-      : 0;
-
-  const weekSessions = focusSessions.filter(
-    (s) => s.started_at >= weekStart.toISOString()
-  );
-  const totalPlanned = weekSessions.reduce((s, x) => s + x.planned_seconds, 0);
-  const totalActual  = weekSessions.reduce((s, x) => s + x.actual_seconds, 0);
-  const focusPct     =
-    totalPlanned > 0
-      ? Math.min(100, Math.round((totalActual / totalPlanned) * 100))
-      : 0;
-
-  const completedSessions = weekSessions.filter((s) => s.completed).length;
-  const deepWorkPct =
-    weekSessions.length > 0
-      ? Math.round((completedSessions / weekSessions.length) * 100)
-      : 0;
-
-  const uniqueDays = new Set(weekLogs.map((l) => l.day)).size;
-  const consistencyPct = Math.min(100, Math.round((uniqueDays / 7) * 100));
-
-  return [
-    { label: "Habits",      pct: habitsPct },
-    { label: "Deep work",   pct: deepWorkPct },
-    { label: "Focus time",  pct: focusPct },
-    { label: "Consistency", pct: consistencyPct },
-  ];
 }
 
 function shouldShowDebrief(blocks: ScheduleBlock[]): boolean {
@@ -99,7 +53,6 @@ export default function TodayClient({
     blocks[0] ??
     null;
 
-  const bars = computeBars(habits, allLogs, focusSessions);
   const todayStr = toDateStr(new Date());
 
   // Check debrief trigger once on mount, and once per minute after 5pm
@@ -176,9 +129,8 @@ export default function TodayClient({
                 isGuest={isGuest}
                 userId={userId}
               />
-              <WeeklyBars bars={bars} />
+              <TodayActivity blocks={blocks} />
             </div>
-            <TodayActivity blocks={blocks} />
           </div>
         </div>
       </div>

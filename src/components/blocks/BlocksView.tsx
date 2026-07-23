@@ -249,10 +249,11 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
     });
 
     if (!isGuest) {
-      await supabase.from("block_templates").delete().eq("id", id);
-      // Delete only this template's upcoming, untagged copies (matched by
-      // template_id) — never past history, never customized/completed copies,
-      // never other sources.
+      // Delete the copies BEFORE the template: the template FK is ON DELETE
+      // SET NULL, so deleting the template first nulls template_id on every
+      // copy and this delete would match nothing, orphaning the copies.
+      // Scope: only this template's upcoming, untagged copies — never past
+      // history, never customized/completed copies, never other sources.
       await supabase
         .from("schedule_blocks")
         .delete()
@@ -261,6 +262,7 @@ export default function BlocksView({ initialTemplates, initialWeekBlocks, isGues
         .eq("customized", false)
         .eq("done", false)
         .gte("day", todayStr);
+      await supabase.from("block_templates").delete().eq("id", id);
     }
   }
 

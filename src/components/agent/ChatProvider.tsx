@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createClient } from "@/lib/supabase-browser";
 
 // Chat state lives here, mounted in the ROOT layout, so the conversation
 // survives navigation between tabs. The send flow (history mapping, error
@@ -44,6 +45,30 @@ export default function ChatProvider({ children }: { children: React.ReactNode }
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+
+  // The provider outlives sign-out/sign-in (it's mounted in the root layout),
+  // so chat state must be wiped whenever the authenticated user changes —
+  // otherwise one user's conversation would persist into another's session
+  // and be resent as their chat history.
+  const lastUserIdRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const supabase = createClient();
+    const reset = () => {
+      setMessages([WELCOME]);
+      setInput("");
+      setOpen(false);
+      setSending(false);
+    };
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (lastUserIdRef.current === undefined) lastUserIdRef.current = user?.id ?? null;
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const uid = session?.user?.id ?? null;
+      if (lastUserIdRef.current !== undefined && uid !== lastUserIdRef.current) reset();
+      lastUserIdRef.current = uid;
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   const toggleOpen = useCallback(() => setOpen((o) => !o), []);
 

@@ -37,7 +37,7 @@ export default function FloatingChat() {
   const { messages, open, setOpen, toggleOpen, input, setInput, sending, send } = useChat();
   const pathname = usePathname();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Keep the newest message in view while the panel is open.
   useEffect(() => {
@@ -50,10 +50,21 @@ export default function FloatingChat() {
     if (open) inputRef.current?.focus();
   }, [open]);
 
+  // Auto-grow the textarea with its content: 1 line at rest, up to ~6 lines
+  // (144px), then scroll internally. Runs on every input change — including
+  // the programmatic clear after send, which collapses it back to one line.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
+  }, [input, open]);
+
   // No chat bubble on auth screens.
   if (pathname === "/login" || pathname.startsWith("/auth")) return null;
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  // Enter sends; Shift+Enter inserts a line break (standard chat behavior).
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -95,8 +106,9 @@ export default function FloatingChat() {
                 <div className="max-w-[85%] flex flex-col gap-1">
                   <div
                     className={[
-                      "rounded-[12px] px-3 py-2 text-[13.5px] leading-relaxed",
-                      msg.role === "user" ? "bg-violet/20 text-txt" : "bg-ink text-txt",
+                      "rounded-[12px] px-3 py-2 text-[13.5px] leading-relaxed break-words",
+                      // pre-wrap so line breaks typed via Shift+Enter render
+                      msg.role === "user" ? "bg-violet/20 text-txt whitespace-pre-wrap" : "bg-ink text-txt",
                     ].join(" ")}
                   >
                     {msg.role === "user" ? (
@@ -123,15 +135,16 @@ export default function FloatingChat() {
             )}
           </div>
 
-          <div className="flex items-center gap-2 mt-auto">
-            <input
+          <div className="flex items-end gap-2 mt-auto">
+            <textarea
               ref={inputRef}
+              rows={1}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={sending}
               placeholder="Message Cadence…"
-              className="flex-1 bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm placeholder:text-faint outline-none focus:border-violet transition-colors disabled:opacity-60"
+              className="flex-1 resize-none bg-ink border border-line rounded-lg px-3 py-1.5 text-txt text-sm leading-[1.5] placeholder:text-faint outline-none focus:border-violet transition-colors disabled:opacity-60 max-h-[144px] overflow-y-auto"
             />
             <button
               onClick={send}

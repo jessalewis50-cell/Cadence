@@ -396,7 +396,10 @@ function DayPlanMode({ blocks }: { blocks: ScheduleBlock[] }) {
     : 0;
 
   return (
-    <div className="flex flex-col items-center text-center">
+    <div className="flex items-start gap-5">
+      {/* Left column: ring + day progress. Fixed width — the ring doesn't
+          benefit from growing; the list gets the extra space instead. */}
+      <div className="w-[200px] shrink-0 flex flex-col items-center text-center">
       {/* Ring */}
       {isActive ? (
         <Ring
@@ -448,9 +451,11 @@ function DayPlanMode({ blocks }: { blocks: ScheduleBlock[] }) {
           </div>
         </div>
       )}
+      </div>
 
-      {/* Segment list */}
-      <div className="w-full mt-3 flex flex-col gap-1 max-h-[220px] overflow-y-auto">
+      {/* Right column: scrollable segment list takes the remaining width.
+          max-height ≈ the ring column's height so the card stays compact. */}
+      <div className="flex-1 min-w-0 flex flex-col gap-1 max-h-[248px] overflow-y-auto">
         {segs.map((seg, i) => {
           const isPast    = isAfter || (isActive && i < idx);
           const isCurrent = isActive && i === idx;

@@ -85,7 +85,7 @@ export default function FloatingChat() {
 
           <div
             ref={scrollRef}
-            className="flex flex-col gap-2.5 overflow-y-auto max-h-[min(600px,65vh)] pr-1 mb-3"
+            className="flex flex-col gap-2.5 overflow-y-auto max-h-[min(600px,60vh)] pr-1 mb-3"
           >
             {messages.map((msg) => (
               <div

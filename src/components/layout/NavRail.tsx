@@ -7,19 +7,23 @@ const NAV_ITEMS = [
   {
     href: "/today",
     title: "Today",
+    // Sun — reads as "the current day" without colliding with the calendar
+    // (now on Schedule), Habits' checkmark, or the focus timer's clock.
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="3" y="4" width="18" height="18" rx="2"/>
-        <path d="M3 10h18M8 2v4M16 2v4"/>
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
       </svg>
     ),
   },
   {
+    // Label + icon only — the route and page content are unchanged.
     href: "/goals",
-    title: "Goals",
+    title: "Schedule",
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+        <rect x="3" y="4" width="18" height="18" rx="2"/>
+        <path d="M3 10h18M8 2v4M16 2v4"/>
       </svg>
     ),
   },

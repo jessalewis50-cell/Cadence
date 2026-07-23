@@ -122,15 +122,13 @@ export default function TodayClient({
           />
 
           <div className="flex flex-col gap-[22px]">
-            <div className="grid grid-cols-2 gap-[22px] items-start">
-              <PomodoroTimer
-                activeBlock={activeBlock}
-                todayBlocks={blocks}
-                isGuest={isGuest}
-                userId={userId}
-              />
-              <TodayActivity blocks={blocks} />
-            </div>
+            <PomodoroTimer
+              activeBlock={activeBlock}
+              todayBlocks={blocks}
+              isGuest={isGuest}
+              userId={userId}
+            />
+            <TodayActivity blocks={blocks} />
           </div>
         </div>
       </div>
